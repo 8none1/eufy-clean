@@ -6,11 +6,11 @@
     ],
     "config_flow": true,
     "dependencies": [],
-    "loggers": ["custom_components.robovac_mqtt"],
     "documentation": "https://github.com/8none1/eufy-clean",
     "integration_type": "device",
     "iot_class": "cloud_push",
     "issue_tracker": "https://github.com/8none1/eufy-clean/issues",
+    "loggers": ["custom_components.robovac_mqtt"],
     "requirements": ["paho-mqtt>=1.6.1", "protobuf>=4.0.0"],
     "version": "1.4.0"
 }
