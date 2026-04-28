@@ -127,7 +127,7 @@ class EufyHTTPClient:
                     _LOGGER.debug("get_device_list raw response: %s", data)
                     devices = data.get("data", {}).get("devices")
                     if not devices:
-                        _LOGGER.warning("get_device_list: no 'devices' key in response data. Keys: %s", list(data.keys()))
+                        _LOGGER.warning("get_device_list: 'devices' is empty or None in response (value: %r)", devices)
                         return []
                     return [device["device"] for device in devices]
                 _LOGGER.error("get_device_list failed (HTTP %s): %s", response.status, await response.text())

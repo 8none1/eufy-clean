@@ -56,6 +56,28 @@ class EufyLogin:
                       len(raw_devices),
                       [d.get("device_sn") for d in raw_devices])
 
+        if not raw_devices and self.eufy_api_devices:
+            _LOGGER.warning(
+                "AIOT device list is empty; falling back to cloud device list. "
+                "DPS state will be populated via MQTT after connection."
+            )
+            self.mqtt_devices = [
+                {
+                    "deviceId": d["id"],
+                    "deviceModel": d.get("product", {}).get("product_code", "")[:5],
+                    "deviceName": d.get("alias_name") or d.get("name", d["id"]),
+                    "deviceModelName": d.get("product", {}).get("name"),
+                    "apiType": "novel",
+                    "mqtt": True,
+                    "dps": {},
+                    "softVersion": d.get("software_version", ""),
+                    "invalid": False,
+                }
+                for d in self.eufy_api_devices
+            ]
+            _LOGGER.debug("Final mqtt_devices count: %d (from cloud fallback)", len(self.mqtt_devices))
+            return
+
         devices = []
         for device in raw_devices:
             sn = device.get("device_sn", "<no sn>")
