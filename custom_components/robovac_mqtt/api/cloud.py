@@ -64,7 +64,7 @@ class EufyLogin:
             self.mqtt_devices = [
                 {
                     "deviceId": d["id"],
-                    "deviceModel": d.get("product", {}).get("product_code", "")[:5],
+                    "deviceModel": d.get("product", {}).get("product_code", ""),
                     "deviceName": d.get("alias_name") or d.get("name", d["id"]),
                     "deviceModelName": d.get("product", {}).get("name"),
                     "apiType": "novel",
@@ -118,8 +118,8 @@ class EufyLogin:
         if device:
             return {
                 "deviceId": deviceId,
-                "deviceModel": device.get("product", {}).get("product_code", "")[:5]
-                or device.get("device_model", "")[:5],
+                "deviceModel": device.get("product", {}).get("product_code", "")
+                or device.get("device_model", ""),
                 "deviceName": device.get("alias_name")
                 or device.get("device_name")
                 or device.get("name"),

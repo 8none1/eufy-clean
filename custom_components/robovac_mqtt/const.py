@@ -119,6 +119,7 @@ EUFY_CLEAN_DEVICES = {
     "T2259": "RoboVac G32",
     "T2261": "RoboVac X8 Hybrid",
     "T2262": "RoboVac X8",
+    "T2262EV": "RoboVac X8 (EV)",
     "T2266": "Robovac X8 Pro",
     "T2267": "RoboVac L60",
     "T2268": "Robovac L60 Hybrid",
@@ -135,7 +136,7 @@ EUFY_CLEAN_DEVICES = {
     "T2080": "Robovac S1",
 }
 
-EUFY_CLEAN_X_SERIES = ["T2262", "T2261", "T2266", "T2276", "T2320", "T2351"]
+EUFY_CLEAN_X_SERIES = ["T2262", "T2262EV", "T2261", "T2266", "T2276", "T2320", "T2351"]
 
 EUFY_CLEAN_G_SERIES = [
     "T2210",

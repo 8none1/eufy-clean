@@ -204,3 +204,65 @@ triggered cleans should trigger the goto; "schedule" cleans should not (unless w
 - No "get current state" request on MQTT connect — state only updates on push
 - `SCENES` capability not mapped to any model yet (scenes require map data; models TBD)
 - T2262EV behaviour not validated against T2262 — might need its own capability entry
+
+## MQTT connectivity investigation — findings (2026-04-28)
+
+A standalone probe (`standalone/eufy_probe.py`) was built to test the MQTT protocol
+independently of Home Assistant. Key findings:
+
+### Root cause: subscriptions rejected (0x80)
+
+Every MQTT SUBACK from `aiot-mqtt-ie.anker.com` returns `0x80` (broker rejected) for ALL
+topics, including device-specific ones and the `#` wildcard. The user certificate returned
+by `get_user_mqtt_info` has **PUBLISH-only** policy on this broker. It cannot subscribe to
+any topics.
+
+This means the integration **cannot receive any status messages** from the robots in the
+current configuration. Commands can be sent (publish succeeds, rc=0) but the robots' replies
+are never delivered.
+
+### Root cause: devices not on AIOT platform
+
+Will's X8 robots appear in the **cloud V2 API** (`api.eufylife.com/v1/device/v2`) but NOT
+in the **AIOT API** (`aiot-clean-api-pr.eufylife.com/app/devicerelation/get_device_list`),
+which returns `null`. The AIOT MQTT broker's IoT policies are per-device and are presumably
+only created when a device is registered on the AIOT platform.
+
+The novel MQTT protocol is designed for **AIOT-registered devices**. Will's X8s are older
+Tuya-based devices that have not been migrated to the AIOT platform.
+
+### T2262EV product code truncation bug (fixed)
+
+`cloud.py` was truncating `product_code[:5]`, turning `T2262EV` → `T2262`. This means:
+- Commands sent to wrong topic: `cmd/eufy_home/T2262/id/req` instead of `cmd/eufy_home/T2262EV/id/req`
+- Model capability lookup fails (T2262EV not found in model sets)
+Fixed: use full product code; added T2262EV to const.py model/device maps.
+
+### What needs to happen for the integration to work
+
+**Option 1 (recommended)**: Will re-pairs the robots using the newer Eufy app. This registers
+them on the AIOT platform, which should:
+- Populate the AIOT device list
+- Create the MQTT IoT policy entries that allow subscription
+
+**Option 2**: Find a subscribe-capable certificate endpoint. There may be a different
+credential endpoint (`get_device_mqtt_credentials` or similar) that returns certs with
+SUBSCRIBE permission. Not found in API probing.
+
+**Option 3**: Tuya local protocol. Both robots have `tuya_pid` in their product data,
+but `device_key` is empty. Without the local key, Tuya local protocol cannot be used.
+
+### What the standalone probe showed
+
+```
+Device: Upstairs Clean  product_code=T2262EV  id=bf3b83d14f132d51b0gzpk
+Device: Downstairs      product_code=T2262    id=bfc291ad10e8247fefwnk2
+MQTT endpoint: aiot-mqtt-ie.anker.com
+Connect: OK (both devices)
+Subscribe cmd/eufy_home/T2262EV/bf3b.../res → 0x80 REJECTED
+Subscribe cmd/eufy_home/T2262/bfc2.../res   → 0x80 REJECTED
+Subscribe cmd/eufy_home/# → 0x80 REJECTED
+Subscribe # → 0x80 REJECTED
+Publish start_auto to Downstairs → rc=0 (accepted by broker)
+Messages received in 10 minutes: 0
+```
