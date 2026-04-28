@@ -4,6 +4,71 @@ from enum import Enum
 from typing import Final
 
 DOMAIN: Final = "robovac_mqtt"
+
+
+class DeviceCapability(str, Enum):
+    MOP = "mop"                   # Has mop cloth + water tank
+    AUTO_EMPTY = "auto_empty"     # Dock auto-empties dustbin
+    STATION_WASH = "station_wash" # Dock washes the mop cloth
+    SCENES = "scenes"             # Supports scene/custom cleaning presets
+
+
+# Models with mopping capability (any "Hybrid" or "Omni" variant)
+_MOP_MODELS: frozenset[str] = frozenset({
+    "T2150",  # G10 Hybrid
+    "T2181",  # LR30 Hybrid+
+    "T2182",  # LR35 Hybrid+
+    "T2190",  # L70 Hybrid
+    "T2192",  # LR20
+    "T2193",  # LR30 Hybrid
+    "T2194",  # LR35 Hybrid
+    "T2253",  # G30 Hybrid
+    "T2256",  # G40 Hybrid
+    "T2258",  # G20 Hybrid
+    "T2261",  # X8 Hybrid
+    "T2268",  # L60 Hybrid
+    "T2273",  # G40 Hybrid+
+    "T2276",  # X8 Pro SES
+    "T2278",  # L60 Hybrid SES
+    "T2320",  # X9 Pro
+    "T2351",  # X10 Pro Omni
+    "T2280",  # Omni C20
+})
+
+# Models whose dock can auto-empty the dustbin
+_AUTO_EMPTY_MODELS: frozenset[str] = frozenset({
+    "T2266",  # X8 Pro
+    "T2270",  # G35+
+    "T2272",  # G30+ SES
+    "T2273",  # G40 Hybrid+
+    "T2276",  # X8 Pro SES
+    "T2277",  # L60 SES
+    "T2278",  # L60 Hybrid SES
+    "T2320",  # X9 Pro
+    "T2351",  # X10 Pro Omni
+    "T2280",  # Omni C20
+})
+
+# Models whose dock can wash the mop cloth
+_STATION_WASH_MODELS: frozenset[str] = frozenset({
+    "T2276",  # X8 Pro SES
+    "T2278",  # L60 Hybrid SES
+    "T2320",  # X9 Pro
+    "T2351",  # X10 Pro Omni
+    "T2280",  # Omni C20
+})
+
+
+def get_device_capabilities(model: str) -> frozenset[DeviceCapability]:
+    """Return the capability set for a given model code."""
+    caps: set[DeviceCapability] = set()
+    if model in _MOP_MODELS:
+        caps.add(DeviceCapability.MOP)
+    if model in _AUTO_EMPTY_MODELS:
+        caps.add(DeviceCapability.AUTO_EMPTY)
+    if model in _STATION_WASH_MODELS:
+        caps.add(DeviceCapability.STATION_WASH)
+    return frozenset(caps)
 VACS: Final = "vacs"
 DEVICES: Final = "devices"
 

@@ -13,7 +13,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .api.client import EufyCleanClient
 from .api.cloud import EufyLogin
 from .api.parser import update_state
-from .const import DOMAIN
+from .const import DOMAIN, DeviceCapability, get_device_capabilities
 from .models import VacuumState
 
 _LOGGER = logging.getLogger(__name__)
@@ -44,6 +44,7 @@ class EufyCleanCoordinator(DataUpdateCoordinator[VacuumState]):
 
         self.client: EufyCleanClient | None = None
         self.data = VacuumState()
+        self._capabilities = get_device_capabilities(self.device_model)
         self._dock_idle_cancel: CALLBACK_TYPE | None = (
             None  # Timer for dock IDLE debounce
         )
@@ -171,6 +172,10 @@ class EufyCleanCoordinator(DataUpdateCoordinator[VacuumState]):
         """Send command to device."""
         if self.client:
             await self.client.send_command(command_dict)
+
+    def has_capability(self, cap: DeviceCapability) -> bool:
+        """Return True if this device model supports the given capability."""
+        return cap in self._capabilities
 
     async def async_shutdown(self) -> None:
         """Cancel pending timers before unload."""

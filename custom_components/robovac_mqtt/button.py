@@ -11,7 +11,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .api.commands import build_command
-from .const import DOMAIN
+from .const import DOMAIN, DeviceCapability
 from .coordinator import EufyCleanCoordinator
 from .proto.cloud.consumable_pb2 import ConsumableRequest
 
@@ -32,16 +32,16 @@ async def async_setup_entry(
     for coordinator in coordinators:
         _LOGGER.debug("Adding buttons for %s", coordinator.device_name)
 
-        entities.extend(
-            [
-                RoboVacButton(coordinator, "Dry Mop", "_dry_mop", "go_dry"),
+        if coordinator.has_capability(DeviceCapability.AUTO_EMPTY):
+            entities.append(
+                RoboVacButton(coordinator, "Empty Dust Bin", "_empty_dust_bin", "collect_dust")
+            )
+        if coordinator.has_capability(DeviceCapability.STATION_WASH):
+            entities.extend([
                 RoboVacButton(coordinator, "Wash Mop", "_wash_mop", "go_selfcleaning"),
-                RoboVacButton(
-                    coordinator, "Empty Dust Bin", "_empty_dust_bin", "collect_dust"
-                ),
+                RoboVacButton(coordinator, "Dry Mop", "_dry_mop", "go_dry"),
                 RoboVacButton(coordinator, "Stop Dry Mop", "_stop_dry_mop", "stop_dry"),
-            ]
-        )
+            ])
 
         # Accessory Reset Buttons
         accessories = [
@@ -50,35 +50,48 @@ async def async_setup_entry(
                 "_reset_filter",
                 ConsumableRequest.FILTER_MESH,
                 "mdi:air-filter",
+                None,
             ),
             (
                 "Reset Rolling Brush",
                 "_reset_main_brush",
                 ConsumableRequest.ROLLING_BRUSH,
                 "mdi:broom",
+                None,
             ),
             (
                 "Reset Side Brush",
                 "_reset_side_brush",
                 ConsumableRequest.SIDE_BRUSH,
                 "mdi:broom",
+                None,
             ),
             (
                 "Reset Sensors",
                 "_reset_sensors",
                 ConsumableRequest.SENSOR,
                 "mdi:eye-outline",
+                None,
             ),
             (
                 "Reset Cleaning Tray",
                 "_reset_scrape",
                 ConsumableRequest.SCRAPE,
                 "mdi:wiper",
+                None,
             ),
-            ("Reset Mopping Cloth", "_reset_mop", ConsumableRequest.MOP, "mdi:water"),
+            (
+                "Reset Mopping Cloth",
+                "_reset_mop",
+                ConsumableRequest.MOP,
+                "mdi:water",
+                DeviceCapability.MOP,
+            ),
         ]
 
-        for name, suffix, reset_type, icon in accessories:
+        for name, suffix, reset_type, icon, required_cap in accessories:
+            if required_cap and not coordinator.has_capability(required_cap):
+                continue
             entities.append(
                 RoboVacButton(
                     coordinator,
