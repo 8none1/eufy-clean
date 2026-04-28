@@ -101,7 +101,7 @@ def update_state(state: VacuumState, dps: dict[str, Any]) -> VacuumState:
 
             # For basic docks that never send STATION_STATUS, infer a sensible
             # dock_status from the work state so the sensor isn't stuck at None.
-            if changes.get("dock_status", state.dock_status) is None and s in (0, 1, 3):
+            if changes.get("dock_status", state.dock_status) is None and work_status.state in (0, 1, 3):
                 changes["dock_status"] = "Idle"
 
             # Update dock_status from WorkStatus if available

@@ -231,6 +231,10 @@ class EufyCleanClient:
             topic = f"cmd/eufy_home/{self.device_model}/{self.device_id}/res"
             _LOGGER.debug("Subscribing to %s", topic)
             client.subscribe(topic)
+            # Wildcard subscription to diagnose topic format — logs any message the
+            # broker delivers for this certificate, regardless of model string.
+            client.subscribe("cmd/eufy_home/#")
+            _LOGGER.debug("Subscribed to wildcard cmd/eufy_home/# for diagnostics")
         else:
             _LOGGER.error("Failed to connect to MQTT, return code %d", rc)
 
