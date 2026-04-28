@@ -13,7 +13,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .api.commands import build_command
-from .const import DOMAIN
+from .const import DOMAIN, DeviceCapability
 from .coordinator import EufyCleanCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -33,51 +33,55 @@ async def async_setup_entry(
     for coordinator in coordinators:
         _LOGGER.debug("Adding select entities for %s", coordinator.device_name)
 
-        entities.append(SceneSelectEntity(coordinator))
+        if coordinator.has_capability(DeviceCapability.SCENES):
+            entities.append(SceneSelectEntity(coordinator))
         entities.append(RoomSelectEntity(coordinator))
 
-        entities.append(
-            DockSelectEntity(
-                coordinator,
-                "wash_frequency_mode",
-                "Wash Frequency Mode",
-                ["ByRoom", "ByTime"],
-                lambda cfg: (
-                    "ByRoom"
-                    if cfg.get("wash", {})
-                    .get("wash_freq", {})
-                    .get("mode", "ByPartition")
-                    == "ByPartition"
-                    else "ByTime"
-                ),
-                _set_wash_freq_mode,
-                icon="mdi:calendar-sync",
+        if coordinator.has_capability(DeviceCapability.MOP):
+            entities.append(
+                DockSelectEntity(
+                    coordinator,
+                    "wash_frequency_mode",
+                    "Wash Frequency Mode",
+                    ["ByRoom", "ByTime"],
+                    lambda cfg: (
+                        "ByRoom"
+                        if cfg.get("wash", {})
+                        .get("wash_freq", {})
+                        .get("mode", "ByPartition")
+                        == "ByPartition"
+                        else "ByTime"
+                    ),
+                    _set_wash_freq_mode,
+                    icon="mdi:calendar-sync",
+                )
             )
-        )
 
-        entities.append(
-            DockSelectEntity(
-                coordinator,
-                "dry_duration",
-                "Dry Duration",
-                ["2h", "3h", "4h"],
-                _get_dry_duration,
-                _set_dry_duration,
-                icon="mdi:timer-sand",
+        if coordinator.has_capability(DeviceCapability.STATION_WASH):
+            entities.append(
+                DockSelectEntity(
+                    coordinator,
+                    "dry_duration",
+                    "Dry Duration",
+                    ["2h", "3h", "4h"],
+                    _get_dry_duration,
+                    _set_dry_duration,
+                    icon="mdi:timer-sand",
+                )
             )
-        )
 
-        entities.append(
-            DockSelectEntity(
-                coordinator,
-                "auto_empty_mode",
-                "Auto Empty Mode",
-                ["Smart", "15 min", "30 min", "45 min", "60 min"],
-                _get_collect_dust_mode,
-                _set_collect_dust_mode,
-                icon="mdi:delete-restore",
+        if coordinator.has_capability(DeviceCapability.AUTO_EMPTY):
+            entities.append(
+                DockSelectEntity(
+                    coordinator,
+                    "auto_empty_mode",
+                    "Auto Empty Mode",
+                    ["Smart", "15 min", "30 min", "45 min", "60 min"],
+                    _get_collect_dust_mode,
+                    _set_collect_dust_mode,
+                    icon="mdi:delete-restore",
+                )
             )
-        )
 
     async_add_entities(entities)
 

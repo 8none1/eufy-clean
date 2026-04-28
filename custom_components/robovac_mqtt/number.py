@@ -13,7 +13,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .api.commands import build_command
-from .const import DOMAIN
+from .const import DOMAIN, DeviceCapability
 from .coordinator import EufyCleanCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -33,23 +33,23 @@ async def async_setup_entry(
     for coordinator in coordinators:
         _LOGGER.debug("Adding number entities for %s", coordinator.device_name)
 
-        # Wash Frequency Value
-        entities.append(
-            DockNumberEntity(
-                coordinator,
-                "wash_frequency_value",
-                "Wash Frequency Value (Time)",
-                15,
-                25,
-                1,  # step
-                lambda cfg: cfg.get("wash", {})
-                .get("wash_freq", {})
-                .get("time_or_area", {})
-                .get("value", 15),
-                _set_wash_freq_value,
-                icon="mdi:clock-time-four-outline",
+        if coordinator.has_capability(DeviceCapability.MOP):
+            entities.append(
+                DockNumberEntity(
+                    coordinator,
+                    "wash_frequency_value",
+                    "Wash Frequency Value (Time)",
+                    15,
+                    25,
+                    1,  # step
+                    lambda cfg: cfg.get("wash", {})
+                    .get("wash_freq", {})
+                    .get("time_or_area", {})
+                    .get("value", 15),
+                    _set_wash_freq_value,
+                    icon="mdi:clock-time-four-outline",
+                )
             )
-        )
 
     async_add_entities(entities)
 

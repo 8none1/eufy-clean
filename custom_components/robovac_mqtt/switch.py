@@ -13,7 +13,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .api.commands import build_command
-from .const import DOMAIN
+from .const import DOMAIN, DeviceCapability
 from .coordinator import EufyCleanCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -33,29 +33,31 @@ async def async_setup_entry(
     for coordinator in coordinators:
         _LOGGER.debug("Adding switch entities for %s", coordinator.device_name)
 
-        entities.append(
-            DockSwitchEntity(
-                coordinator,
-                "auto_empty",
-                "Auto Empty",
-                lambda cfg: cfg.get("collectdust_v2", {})
-                .get("sw", {})
-                .get("value", False),
-                _set_collect_dust,
-                icon="mdi:delete-restore",
+        if coordinator.has_capability(DeviceCapability.AUTO_EMPTY):
+            entities.append(
+                DockSwitchEntity(
+                    coordinator,
+                    "auto_empty",
+                    "Auto Empty",
+                    lambda cfg: cfg.get("collectdust_v2", {})
+                    .get("sw", {})
+                    .get("value", False),
+                    _set_collect_dust,
+                    icon="mdi:delete-restore",
+                )
             )
-        )
 
-        entities.append(
-            DockSwitchEntity(
-                coordinator,
-                "auto_wash",
-                "Auto Wash",
-                lambda cfg: cfg.get("wash", {}).get("cfg", "CLOSE") == "STANDARD",
-                _set_wash_cfg,
-                icon="mdi:water-sync",
+        if coordinator.has_capability(DeviceCapability.STATION_WASH):
+            entities.append(
+                DockSwitchEntity(
+                    coordinator,
+                    "auto_wash",
+                    "Auto Wash",
+                    lambda cfg: cfg.get("wash", {}).get("cfg", "CLOSE") == "STANDARD",
+                    _set_wash_cfg,
+                    icon="mdi:water-sync",
+                )
             )
-        )
 
     async_add_entities(entities)
 
