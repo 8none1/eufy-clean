@@ -14,6 +14,7 @@ from custom_components.robovac_mqtt.const import DPS_MAP, EUFY_CLEAN_CONTROL
 from custom_components.robovac_mqtt.models import VacuumState
 from custom_components.robovac_mqtt.proto.cloud.error_code_pb2 import ErrorCode
 from custom_components.robovac_mqtt.proto.cloud.work_status_pb2 import WorkStatus
+from custom_components.robovac_mqtt.utils import encode_message
 
 
 def test_update_state_battery():
@@ -82,6 +83,17 @@ def test_update_state_station_status(mock_decode):
     new_state = update_state(state, dps)
 
     assert new_state.dock_status == "Emptying dust"
+
+
+def test_update_state_error_code_real_protobuf():
+    """Test error code parsing with a real encoded protobuf (no mocking)."""
+    state = VacuumState()
+    error = ErrorCode()
+    error.warn.append(6011)
+    dps = {DPS_MAP["ERROR_CODE"]: encode_message(error)}
+    new_state = update_state(state, dps)
+    assert new_state.error_code == 6011
+    assert new_state.error_message == "STATION LOW CLEAN WATER"
 
 
 @patch("custom_components.robovac_mqtt.api.commands.encode")
