@@ -6,6 +6,7 @@
     ],
     "config_flow": true,
     "dependencies": [],
+    "loggers": ["custom_components.robovac_mqtt"],
     "documentation": "https://github.com/8none1/eufy-clean",
     "integration_type": "device",
     "iot_class": "cloud_push",
