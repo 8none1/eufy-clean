@@ -124,10 +124,13 @@ class EufyHTTPClient:
             ) as response:
                 if response.status == 200:
                     data = await response.json()
+                    _LOGGER.debug("get_device_list raw response: %s", data)
                     devices = data.get("data", {}).get("devices")
                     if not devices:
+                        _LOGGER.warning("get_device_list: no 'devices' key in response data. Keys: %s", list(data.keys()))
                         return []
                     return [device["device"] for device in devices]
+                _LOGGER.error("get_device_list failed (HTTP %s): %s", response.status, await response.text())
                 return []
 
     async def get_cloud_device_list(self) -> list[dict[str, Any]]:
@@ -146,7 +149,12 @@ class EufyHTTPClient:
             ) as response:
                 if response.status == 200:
                     data = await response.json()
-                    return data.get("devices", [])
+                    _LOGGER.debug("get_cloud_device_list raw response: %s", data)
+                    devices = data.get("devices", [])
+                    if not devices:
+                        _LOGGER.warning("get_cloud_device_list: no 'devices' key in response. Keys: %s", list(data.keys()))
+                    return devices
+                _LOGGER.error("get_cloud_device_list failed (HTTP %s): %s", response.status, await response.text())
                 return []
 
     async def get_mqtt_credentials(self) -> dict[str, Any] | None:

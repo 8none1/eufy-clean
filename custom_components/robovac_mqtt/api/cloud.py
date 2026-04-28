@@ -47,20 +47,38 @@ class EufyLogin:
 
     async def getDevices(self) -> None:
         self.eufy_api_devices = await self.eufyApi.get_cloud_device_list()
-        devices = await self.eufyApi.get_device_list()
-        devices = [
-            {
-                **self.findModel(device["device_sn"]),
+        _LOGGER.debug("Cloud device list returned %d device(s): %s",
+                      len(self.eufy_api_devices),
+                      [d.get("id") for d in self.eufy_api_devices])
+
+        raw_devices = await self.eufyApi.get_device_list()
+        _LOGGER.debug("AIOT device list returned %d device(s): %s",
+                      len(raw_devices),
+                      [d.get("device_sn") for d in raw_devices])
+
+        devices = []
+        for device in raw_devices:
+            sn = device.get("device_sn", "<no sn>")
+            model_info = self.findModel(sn)
+            if model_info["invalid"]:
+                _LOGGER.warning("Device %s not found in cloud device list — skipping. "
+                                "Cloud IDs available: %s",
+                                sn, [d.get("id") for d in self.eufy_api_devices])
+            else:
+                _LOGGER.debug("Matched device %s → model %s (%s)",
+                              sn, model_info["deviceModel"], model_info["deviceName"])
+            devices.append({
+                **model_info,
                 "apiType": self.checkApiType(device.get("dps", {})),
                 "mqtt": True,
                 "dps": device.get("dps", {}),
                 "softVersion": device.get("main_sw_version")
                 or device.get("soft_version")
                 or "",
-            }
-            for device in devices
-        ]
+            })
+
         self.mqtt_devices = [d for d in devices if not d["invalid"]]
+        _LOGGER.debug("Final mqtt_devices count: %d", len(self.mqtt_devices))
 
     async def getMqttDevice(self, deviceId: str):
         devices = await self.eufyApi.get_device_list()
