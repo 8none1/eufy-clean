@@ -99,6 +99,11 @@ def update_state(state: VacuumState, dps: dict[str, Any]) -> VacuumState:
             if work_status.HasField("cleaning") and work_status.cleaning.scheduled_task:
                 changes["trigger_source"] = "schedule"
 
+            # For basic docks that never send STATION_STATUS, infer a sensible
+            # dock_status from the work state so the sensor isn't stuck at None.
+            if changes.get("dock_status", state.dock_status) is None and s in (0, 1, 3):
+                changes["dock_status"] = "Idle"
+
             # Update dock_status from WorkStatus if available
             # This helps clear "stuck" states (like Drying) if StationResponse
             # stops updating but WorkStatus continues to report (e.g. as Charging/Idle).

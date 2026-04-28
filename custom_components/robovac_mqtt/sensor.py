@@ -15,7 +15,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import ACCESSORY_MAX_LIFE, DOMAIN
+from .const import ACCESSORY_MAX_LIFE, DOMAIN, DeviceCapability
 from .coordinator import EufyCleanCoordinator, VacuumState
 
 _LOGGER = logging.getLogger(__name__)
@@ -106,32 +106,34 @@ async def async_setup_entry(
             )
         )
 
-        # Water level sensor (Station Clean Water)
-        entities.append(
-            RoboVacSensor(
-                coordinator,
-                "water_level",
-                "Water Level",
-                lambda s: s.station_clean_water,
-                device_class=None,
-                unit=PERCENTAGE,
-                state_class=SensorStateClass.MEASUREMENT,
+        # Water level (station clean water tank — only present on station-wash docks)
+        if coordinator.has_capability(DeviceCapability.STATION_WASH):
+            entities.append(
+                RoboVacSensor(
+                    coordinator,
+                    "water_level",
+                    "Water Level",
+                    lambda s: s.station_clean_water,
+                    device_class=None,
+                    unit=PERCENTAGE,
+                    state_class=SensorStateClass.MEASUREMENT,
+                )
             )
-        )
 
-        # Dock status sensor
-        entities.append(
-            RoboVacSensor(
-                coordinator,
-                "dock_status",
-                "Dock Status",
-                lambda s: s.dock_status,
-                device_class=None,
-                unit=None,
-                state_class=None,
-                category=EntityCategory.DIAGNOSTIC,
+        # Dock status (only meaningful for smart docks with auto-empty)
+        if coordinator.has_capability(DeviceCapability.AUTO_EMPTY):
+            entities.append(
+                RoboVacSensor(
+                    coordinator,
+                    "dock_status",
+                    "Dock Status",
+                    lambda s: s.dock_status,
+                    device_class=None,
+                    unit=None,
+                    state_class=None,
+                    category=EntityCategory.DIAGNOSTIC,
+                )
             )
-        )
 
         # Active map ID sensor
         entities.append(
@@ -150,15 +152,17 @@ async def async_setup_entry(
 
         # Accessory Sensors
         accessories = [
-            ("filter_usage", "Filter Remaining", "mdi:air-filter"),
-            ("main_brush_usage", "Rolling Brush Remaining", "mdi:broom"),
-            ("side_brush_usage", "Side Brush Remaining", "mdi:broom"),
-            ("sensor_usage", "Sensor Remaining", "mdi:eye-outline"),
-            ("scrape_usage", "Cleaning Tray Remaining", "mdi:wiper"),
-            ("mop_usage", "Mopping Cloth Remaining", "mdi:water"),
+            ("filter_usage", "Filter Remaining", "mdi:air-filter", None),
+            ("main_brush_usage", "Rolling Brush Remaining", "mdi:broom", None),
+            ("side_brush_usage", "Side Brush Remaining", "mdi:broom", None),
+            ("sensor_usage", "Sensor Remaining", "mdi:eye-outline", None),
+            ("scrape_usage", "Cleaning Tray Remaining", "mdi:wiper", DeviceCapability.MOP),
+            ("mop_usage", "Mopping Cloth Remaining", "mdi:water", DeviceCapability.MOP),
         ]
 
-        for attr, name, icon in accessories:
+        for attr, name, icon, required_cap in accessories:
+            if required_cap and not coordinator.has_capability(required_cap):
+                continue
             # We must capture the specific attr value in the lambda default args
             # otherwise all lambdas will point to the last attr in the loop
             def get_accessory_remaining(state: VacuumState, a: str = attr) -> int:

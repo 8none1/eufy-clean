@@ -78,7 +78,7 @@ async def async_setup_entry(
                 "_reset_scrape",
                 ConsumableRequest.SCRAPE,
                 "mdi:wiper",
-                None,
+                DeviceCapability.MOP,
             ),
             (
                 "Reset Mopping Cloth",
