@@ -60,14 +60,7 @@ class RoboVacMQTTEntity(CoordinatorEntity[EufyCleanCoordinator], StateVacuumEnti
             | VacuumEntityFeature.FAN_SPEED
             | VacuumEntityFeature.RETURN_HOME
             | VacuumEntityFeature.SEND_COMMAND
-            | VacuumEntityFeature.BATTERY
         )
-
-    @property
-    def battery_level(self) -> int | None:
-        """Return the battery level of the vacuum cleaner."""
-        level = self.coordinator.data.battery_level
-        return level if level is not None else None
 
     @property
     def activity(self) -> VacuumActivity | None:
