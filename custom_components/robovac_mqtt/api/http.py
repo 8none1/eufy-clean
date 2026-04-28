@@ -58,6 +58,8 @@ class EufyHTTPClient:
                     "email": self.username,
                     "password": self.password,
                     "client_id": "eufyhome-app",
+                    # NOTE: Extracted from the Eufy app binary; shared application credential,
+                    # not a user secret. If Eufy rotates it, the integration must be updated.
                     "client_secret": "GQCpr9dSp3uQpsOMgJ4xQ",
                 },
             ) as response:
@@ -93,7 +95,8 @@ class EufyHTTPClient:
                         _LOGGER.error("No user_center_id found")
                         return None
 
-                    # Generate GToken
+                    # NOTE: Eufy API uses MD5(user_center_id) as gtoken — deterministic,
+                    # not cryptographically secure. This is an upstream API limitation.
                     self.user_info["gtoken"] = hashlib.md5(  # type: ignore
                         self.user_info["user_center_id"].encode()  # type: ignore
                     ).hexdigest()

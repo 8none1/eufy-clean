@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -196,7 +197,7 @@ class DockSelectEntity(CoordinatorEntity[EufyCleanCoordinator], SelectEntity):
 
     async def async_select_option(self, option: str) -> None:
         """Change the selected option."""
-        cfg = self.coordinator.data.dock_auto_cfg.copy()
+        cfg = copy.deepcopy(self.coordinator.data.dock_auto_cfg)
         self._setter(cfg, option)
 
         command = build_command("set_auto_cfg", cfg=cfg)

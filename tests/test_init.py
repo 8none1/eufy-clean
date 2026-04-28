@@ -50,6 +50,7 @@ async def test_load_unload_entry(hass: HomeAssistant):
         mock_coord.data = MagicMock()  # Mock the VacuumState data
 
         # Mock client and disconnect method
+        mock_coord.async_shutdown = AsyncMock()
         mock_coord.client = MagicMock()
         mock_coord.client.disconnect = AsyncMock()
 

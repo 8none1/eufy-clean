@@ -7,6 +7,7 @@ import string
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
 
 from .api.cloud import EufyLogin
 from .const import DOMAIN
@@ -31,7 +32,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     username = entry.data[CONF_USERNAME]
     password = entry.data[CONF_PASSWORD]
 
-    # Generate OpenUDID (consistent per session)
+    # NOTE: openudid is regenerated on every HA restart; consider persisting in config entry
+    # to avoid potential rate-limiting from Eufy's backend treating each restart as a new device.
     openudid = "".join(random.choices(string.hexdigits, k=32))
 
     # Initialize Login Controller
@@ -66,10 +68,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.warning("Failed to initialize coordinator for %s: %s", device_id, e)
 
     if not coordinators:
-        _LOGGER.warning("No Eufy Clean devices found or initialized.")
-        # We generally return True anyway to avoid blocking HA startup,
-        # unless critical failure?
-        # But if no devices, nothing to do.
+        raise ConfigEntryNotReady("No Eufy devices found — will retry")
 
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {"coordinators": coordinators}
@@ -87,10 +86,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         data = hass.data[DOMAIN].get(entry.entry_id)
         if data and "coordinators" in data:
             for coordinator in data["coordinators"]:
-                # Disconnect client
+                await coordinator.async_shutdown()
                 if coordinator.client:
                     await coordinator.client.disconnect()
-                    # Need to ensure disconnect exists or implement it
 
         hass.data[DOMAIN].pop(entry.entry_id)
 

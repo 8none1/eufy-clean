@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -111,7 +112,7 @@ class DockNumberEntity(CoordinatorEntity[EufyCleanCoordinator], NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         """Set the value."""
-        cfg = self.coordinator.data.dock_auto_cfg.copy()
+        cfg = copy.deepcopy(self.coordinator.data.dock_auto_cfg)
         self._setter(cfg, value)
 
         command = build_command("set_auto_cfg", cfg=cfg)

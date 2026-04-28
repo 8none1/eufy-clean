@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import ssl
+import stat
 import tempfile
 import time
 from collections.abc import Callable
@@ -33,25 +35,35 @@ def get_blocking_mqtt_client(
     )
     client.username_pw_set(username)
 
-    # Create persistent temp files for certs
-    # IMPORTANT: Paho MQTT keeps file path references and reads them on reconnect
-    # These files MUST persist for the lifetime of the MQTT client
-    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".pem") as ca_file:
-        ca_file.write(certificate_pem)
-        ca_path = ca_file.name
+    # IMPORTANT: Paho reads cert files on reconnect, so they must persist for the client's
+    # lifetime. Cleaned up in disconnect(). On exception here, clean up immediately.
+    ca_path = None
+    key_path = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".pem") as ca_file:
+            ca_file.write(certificate_pem)
+            ca_path = ca_file.name
+        os.chmod(ca_path, stat.S_IRUSR | stat.S_IWUSR)
 
-    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".key") as key_file:
-        key_file.write(private_key)
-        key_path = key_file.name
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".key") as key_file:
+            key_file.write(private_key)
+            key_path = key_file.name
+        os.chmod(key_path, stat.S_IRUSR | stat.S_IWUSR)
 
-    client.tls_set(
-        certfile=ca_path,
-        keyfile=key_path,
-        cert_reqs=ssl.CERT_REQUIRED,
-        tls_version=ssl.PROTOCOL_TLSv1_2,
-    )
+        context = ssl.create_default_context()
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.load_cert_chain(certfile=ca_path, keyfile=key_path)
+        client.tls_set_context(context)
 
-    return client, ca_path, key_path
+        return client, ca_path, key_path
+    except Exception:
+        for p in (ca_path, key_path):
+            if p:
+                try:
+                    unlink(p)
+                except OSError:
+                    pass
+        raise
 
 
 class EufyCleanClient:
@@ -179,7 +191,12 @@ class EufyCleanClient:
         await self._loop.run_in_executor(
             None, partial(self._mqtt_client.connect, self.endpoint, 8883, 60)
         )
+        self._connected_event.clear()
         self._mqtt_client.loop_start()
+        try:
+            await asyncio.wait_for(self._connected_event.wait(), timeout=30.0)
+        except asyncio.TimeoutError:
+            raise ConnectionError("MQTT connection timed out after 30s")
 
     async def disconnect(self):
         """Disconnect from MQTT and clean up certificate files."""
@@ -209,7 +226,7 @@ class EufyCleanClient:
     def _on_connect(self, client, userdata, flags, rc):
         if rc == 0:
             _LOGGER.info("Connected to MQTT Broker!")
-            self._connected_event.set()
+            self._loop.call_soon_threadsafe(self._connected_event.set)
             # Subscribe to specific device topic
             topic = f"cmd/eufy_home/{self.device_model}/{self.device_id}/res"
             _LOGGER.debug("Subscribing to %s", topic)
@@ -219,7 +236,7 @@ class EufyCleanClient:
 
     def _on_disconnect(self, client, userdata, rc):
         _LOGGER.warning("Disconnected from MQTT broker, rc=%d", rc)
-        self._connected_event.clear()
+        self._loop.call_soon_threadsafe(self._connected_event.clear)
 
     def _on_message(self, client, userdata, msg):
         """Handle incoming MQTT messages."""

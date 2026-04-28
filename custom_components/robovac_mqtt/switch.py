@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -78,13 +79,6 @@ def _set_wash_cfg(cfg: dict[str, Any], val: bool) -> None:
         cfg["wash"]["cfg"] = 1 if val else 0
 
 
-def _set_dry_cfg(cfg: dict[str, Any], val: bool) -> None:
-    """Helper to set dry state in config dict."""
-    if "dry" not in cfg:
-        cfg["dry"] = {"cfg": 1 if val else 0}
-    else:
-        cfg["dry"]["cfg"] = 1 if val else 0
-
 
 class DockSwitchEntity(CoordinatorEntity[EufyCleanCoordinator], SwitchEntity):
     """Switch for Dock/Station settings."""
@@ -134,7 +128,7 @@ class DockSwitchEntity(CoordinatorEntity[EufyCleanCoordinator], SwitchEntity):
 
     async def _set_state(self, state: bool) -> None:
         """Send command to update config."""
-        cfg = self.coordinator.data.dock_auto_cfg.copy()
+        cfg = copy.deepcopy(self.coordinator.data.dock_auto_cfg)
         self._setter(cfg, state)
 
         command = build_command("set_auto_cfg", cfg=cfg)

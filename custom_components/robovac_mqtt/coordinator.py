@@ -172,6 +172,12 @@ class EufyCleanCoordinator(DataUpdateCoordinator[VacuumState]):
         if self.client:
             await self.client.send_command(command_dict)
 
+    async def async_shutdown(self) -> None:
+        """Cancel pending timers before unload."""
+        if self._dock_idle_cancel:
+            self._dock_idle_cancel()
+            self._dock_idle_cancel = None
+
     async def _async_update_data(self) -> VacuumState:
         """Fetch data from API endpoint.
 
