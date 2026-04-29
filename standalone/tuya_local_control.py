@@ -24,8 +24,12 @@ Usage:
 
 device:  "upstairs" or "downstairs"
 x, y:    integer coordinates in the robot's internal SLAM coordinate space
-         (discover these by running 'monitor' while the robot is active,
-          or by using the Eufy app to send a goto command and watching DPS 124)
+         (use 'find_coords' to discover these — see below)
+
+    # Discover coordinates interactively after a clean:
+    python tuya_local_control.py find_coords <device>
+    # Waits for robot to complete a clean, then probes coordinate grid
+    # near (0,0) until goto succeeds, printing the working coordinates.
 """
 from __future__ import annotations
 
@@ -284,6 +288,120 @@ def cmd_goto_when_active(device_name: str, x: int, y: int, timeout: int = 300) -
     print(f"Timed out waiting for active state.")
 
 
+def _spiral_coords(step: int = 50, max_radius: int = 1000):
+    """Yield (x, y) coordinates in an expanding square spiral around (0,0)."""
+    yield (0, 0)
+    radius = step
+    while radius <= max_radius:
+        for x in range(-radius, radius + 1, step):
+            yield (x, -radius)
+        for y in range(-radius + step, radius + 1, step):
+            yield (radius, y)
+        for x in range(radius - step, -radius - 1, -step):
+            yield (x, radius)
+        for y in range(radius - step, -radius - 1, -step):
+            yield (-radius, y)
+        radius += step
+
+
+def cmd_find_coords(device_name: str, timeout: int = 600) -> None:
+    """
+    Wait for the robot to finish a clean, then probe goto coordinates near (0,0)
+    until one succeeds (result='O'). Prints the working coordinates and immediately
+    sends the robot home so it doesn't drive somewhere unexpected.
+
+    Best workflow:
+      1. Run a normal clean via the Eufy app (or 'start' command)
+      2. Immediately run this command — it will wait for DPS 15 = "Completed"
+      3. Once found, use those coordinates with 'goto_active'
+
+    The probe expands outward in a square spiral: (0,0), then ±50 increments up
+    to ±1000.  'O' means the coordinate is on the map and the robot will navigate.
+    'F' means the robot rejected it (off-map, or robot went back to sleep).
+    """
+    info = DEVICES[device_name]
+    if info["map_id"] is None:
+        print(f"ERROR: {device_name} has no stored map (cleared by factory reset)")
+        return
+
+    d = _device(device_name)
+    d.set_socketPersistent(True)
+    d.set_socketTimeout(5)
+
+    ACTIVE_STATES = {"Running", "Cleaning", "Locating", "Completed", "completed"}
+    DONE_STATES = {"Completed", "completed"}
+
+    # Wait for robot to be in a completed/active state
+    print(f"Waiting up to {timeout}s for robot to reach Completed state...")
+    print("(Run a clean in the Eufy app if the robot is sleeping)")
+    start = time.time()
+    while time.time() - start < timeout:
+        status = d.status()
+        dps = _decode_dps(status.get("dps", {}))
+        state = dps.get("15", "")
+        elapsed = time.time() - start
+        print(f"  [{elapsed:.0f}s] DPS15={state}")
+        if state in DONE_STATES:
+            print(f"Robot completed clean ({state}). Starting coordinate probe...")
+            break
+        if state in ACTIVE_STATES:
+            print(f"Robot is active ({state}). Will probe once it reaches Completed.")
+        time.sleep(5)
+    else:
+        print(f"Timed out after {timeout}s waiting for Completed state.")
+        return
+
+    # Probe coordinates in expanding spiral
+    print(f"\nProbing coordinates (mapId={info['map_id']}, step=50, max=±1000)...")
+    print("Each 'F' = off-map or inactive.  'O' = on-map, robot navigating.\n")
+
+    found_x, found_y = None, None
+    probe_count = 0
+    for x, y in _spiral_coords(step=50, max_radius=1000):
+        data = {"mapId": info["map_id"], "x": x, "y": y}
+        cmd = _encode_cmd("goto", data)
+        response = d.set_value(int(DPS_COMMAND_TRANS), cmd)
+
+        result = "?"
+        if response and "dps" in response:
+            decoded = _decode_dps(response["dps"])
+            dps124 = decoded.get("124")
+            if isinstance(dps124, dict):
+                result = dps124.get("result", "?")
+        elif response is None:
+            result = "no-response"
+
+        print(f"  goto({x:6d},{y:6d}): {result}")
+
+        if result == "O":
+            found_x, found_y = x, y
+            print(f"\n*** FOUND working coordinates: x={x}, y={y} ***")
+            print("Sending robot home immediately...")
+            home_result = d.set_value(int(DPS_RETURN_HOME), True)
+            print(f"  home command: {home_result}")
+            break
+
+        probe_count += 1
+        # Every 10 probes, verify the robot is still in an active state
+        if probe_count % 10 == 0:
+            chk = _decode_dps(d.status().get("dps", {}))
+            state = chk.get("15", "")
+            print(f"  [state check] DPS15={state}")
+            if state not in ACTIVE_STATES:
+                print(f"\nRobot left active state ({state}). Stopping probe.")
+                print("Re-run find_coords after the next clean.")
+                break
+
+        time.sleep(0.5)  # don't hammer the robot
+
+    if found_x is not None:
+        print(f"\nUpdate DEVICES['{device_name}'] with these coordinates for your HA automation.")
+        print(f"  goto({found_x}, {found_y})")
+    else:
+        print("\nNo working coordinates found in ±1000 range.")
+        print("Try running after a complete clean (robot fully docked, map loaded).")
+
+
 def cmd_monitor(device_name: str, duration: int = 120) -> None:
     """
     Monitor all DPS updates from the robot for <duration> seconds.
@@ -362,16 +480,18 @@ Usage:
   tuya_local_control.py home           <device>
   tuya_local_control.py goto           <device> <x> <y>
   tuya_local_control.py goto_active    <device> <x> <y> [timeout_s]
+  tuya_local_control.py find_coords    <device> [timeout_s]
   tuya_local_control.py test_goto      <device>
   tuya_local_control.py monitor        <device> [duration_seconds]
 
 device: upstairs | downstairs
 
 To discover coordinates:
-  Run 'monitor', then use the Eufy app to send a goto command to the
-  target location.  DPS 124 will echo the coordinates.
-  Alternatively, use the Tuya IoT developer API to download the map
-  binary and read the dock/origin position from the 48-byte header.
+  1. Start a clean: 'start <device>'
+  2. Run:          'find_coords <device>'
+  The script waits for the robot to dock (DPS15=Completed), then probes
+  a grid of coordinates until goto returns 'O'.  Use those coordinates
+  with 'goto_active' for subsequent runs.
 """
 
 
@@ -390,6 +510,9 @@ def main() -> None:
 
     if cmd == "status":
         cmd_status(device)
+    elif cmd == "find_coords":
+        timeout = int(args[2]) if len(args) > 2 else 600
+        cmd_find_coords(device, timeout)
     elif cmd == "test_goto":
         cmd_test_goto(device)
     elif cmd == "goto_active":
