@@ -26,10 +26,10 @@ device:  "upstairs" or "downstairs"
 x, y:    integer coordinates in the robot's internal SLAM coordinate space
          (use 'find_coords' to discover these — see below)
 
-    # Discover coordinates interactively after a clean:
-    python tuya_local_control.py find_coords <device>
-    # Waits for robot to complete a clean, then probes coordinate grid
-    # near (0,0) until goto succeeds, printing the working coordinates.
+    # Intercept bin coordinates from the Eufy app (one-time setup):
+    python tuya_local_control.py intercept_pos <device>
+    # Polls DPS 124 while you tap the map in the Eufy app to send
+    # the robot to the bin.  Prints the x,y to hardcode for automation.
 """
 from __future__ import annotations
 
@@ -288,118 +288,87 @@ def cmd_goto_when_active(device_name: str, x: int, y: int, timeout: int = 300) -
     print(f"Timed out waiting for active state.")
 
 
-def _spiral_coords(step: int = 50, max_radius: int = 1000):
-    """Yield (x, y) coordinates in an expanding square spiral around (0,0)."""
-    yield (0, 0)
-    radius = step
-    while radius <= max_radius:
-        for x in range(-radius, radius + 1, step):
-            yield (x, -radius)
-        for y in range(-radius + step, radius + 1, step):
-            yield (radius, y)
-        for x in range(radius - step, -radius - 1, -step):
-            yield (x, radius)
-        for y in range(radius - step, -radius - 1, -step):
-            yield (-radius, y)
-        radius += step
-
-
-def cmd_find_coords(device_name: str, timeout: int = 600) -> None:
+def cmd_intercept_pos(device_name: str, duration: int = 90) -> None:
     """
-    Wait for the robot to finish a clean, then probe goto coordinates near (0,0)
-    until one succeeds (result='O'). Prints the working coordinates and immediately
-    sends the robot home so it doesn't drive somewhere unexpected.
+    Intercept the goto coordinates sent by the Eufy app.
 
-    Best workflow:
-      1. Run a normal clean via the Eufy app (or 'start' command)
-      2. Immediately run this command — it will wait for DPS 15 = "Completed"
-      3. Once found, use those coordinates with 'goto_active'
+    The Eufy app's tap-on-map goto encodes the target x,y in DPS 124.
+    This command polls device status in a tight loop and prints the
+    coordinates whenever DPS 124 contains a goto with x,y data.
 
-    The probe expands outward in a square spiral: (0,0), then ±50 increments up
-    to ±1000.  'O' means the coordinate is on the map and the robot will navigate.
-    'F' means the robot rejected it (off-map, or robot went back to sleep).
+    Workflow:
+      1. Make sure the robot is active (just finished a clean, or start one)
+      2. Run this command
+      3. In the Eufy app, tap the map where you want the robot to go (e.g. near the bin)
+      4. This script prints the x,y coordinates
+      5. Hardcode them in DEVICES or pass to 'goto_active'
+
+    This works because d.status() is a direct poll — unlike d.receive() which
+    only sees pushes to our own connection, status() reads whatever DPS 124 the
+    robot last processed (including commands from the app).
     """
-    info = DEVICES[device_name]
-    if info["map_id"] is None:
-        print(f"ERROR: {device_name} has no stored map (cleared by factory reset)")
-        return
-
     d = _device(device_name)
     d.set_socketPersistent(True)
     d.set_socketTimeout(5)
 
-    ACTIVE_STATES = {"Running", "Cleaning", "Locating", "Completed", "completed"}
-    DONE_STATES = {"Completed", "completed"}
+    print(f"Polling {DEVICES[device_name]['name']} for {duration}s ...")
+    print(">>> In the Eufy app, tap the map to send the robot to your target location <<<")
+    print()
 
-    # Wait for robot to be in a completed/active state
-    print(f"Waiting up to {timeout}s for robot to reach Completed state...")
-    print("(Run a clean in the Eufy app if the robot is sleeping)")
+    last_dps124 = None
     start = time.time()
-    while time.time() - start < timeout:
-        status = d.status()
-        dps = _decode_dps(status.get("dps", {}))
-        state = dps.get("15", "")
+    poll_count = 0
+
+    while time.time() - start < duration:
+        try:
+            raw = d.status()
+        except Exception as e:
+            print(f"  [poll error: {e}]")
+            time.sleep(1)
+            continue
+
+        if not raw or "dps" not in raw:
+            time.sleep(1)
+            continue
+
+        decoded = _decode_dps(raw["dps"])
+        dps124 = decoded.get("124")
+
+        poll_count += 1
         elapsed = time.time() - start
-        print(f"  [{elapsed:.0f}s] DPS15={state}")
-        if state in DONE_STATES:
-            print(f"Robot completed clean ({state}). Starting coordinate probe...")
-            break
-        if state in ACTIVE_STATES:
-            print(f"Robot is active ({state}). Will probe once it reaches Completed.")
-        time.sleep(5)
-    else:
-        print(f"Timed out after {timeout}s waiting for Completed state.")
-        return
 
-    # Probe coordinates in expanding spiral
-    print(f"\nProbing coordinates (mapId={info['map_id']}, step=50, max=±1000)...")
-    print("Each 'F' = off-map or inactive.  'O' = on-map, robot navigating.\n")
+        # Print any change in DPS 124
+        if dps124 != last_dps124 and dps124 is not None:
+            last_dps124 = dps124
+            print(f"[{elapsed:5.1f}s] DPS 124 changed: {dps124}")
 
-    found_x, found_y = None, None
-    probe_count = 0
-    for x, y in _spiral_coords(step=50, max_radius=1000):
-        data = {"mapId": info["map_id"], "x": x, "y": y}
-        cmd = _encode_cmd("goto", data)
-        response = d.set_value(int(DPS_COMMAND_TRANS), cmd)
-
-        result = "?"
-        if response and "dps" in response:
-            decoded = _decode_dps(response["dps"])
-            dps124 = decoded.get("124")
             if isinstance(dps124, dict):
-                result = dps124.get("result", "?")
-        elif response is None:
-            result = "no-response"
+                method = dps124.get("method", "")
+                data = dps124.get("data", {})
+                if method == "goto" and ("x" in data or "posX" in data):
+                    x = data.get("x", data.get("posX"))
+                    y = data.get("y", data.get("posY"))
+                    print(f"\n*** TARGET COORDINATES: x={x}, y={y} ***")
+                    print(f"    mapId: {data.get('mapId')}")
+                    print(f"\nAdd to DEVICES['{device_name}']:")
+                    print(f"    \"bin_x\": {x},")
+                    print(f"    \"bin_y\": {y},")
+                    return
+                elif data:
+                    # Print any coordinates we see regardless of method name
+                    for key in ("x", "y", "posX", "posY", "pileX", "pileY"):
+                        if key in data:
+                            print(f"  {key} = {data[key]}")
 
-        print(f"  goto({x:6d},{y:6d}): {result}")
+        # Print a heartbeat every 10s so we know it's alive
+        if poll_count % 20 == 0:
+            state = decoded.get("15", "?")
+            print(f"[{elapsed:5.1f}s] still polling... DPS15={state}, DPS124={type(dps124).__name__}")
 
-        if result == "O":
-            found_x, found_y = x, y
-            print(f"\n*** FOUND working coordinates: x={x}, y={y} ***")
-            print("Sending robot home immediately...")
-            home_result = d.set_value(int(DPS_RETURN_HOME), True)
-            print(f"  home command: {home_result}")
-            break
+        time.sleep(0.5)
 
-        probe_count += 1
-        # Every 10 probes, verify the robot is still in an active state
-        if probe_count % 10 == 0:
-            chk = _decode_dps(d.status().get("dps", {}))
-            state = chk.get("15", "")
-            print(f"  [state check] DPS15={state}")
-            if state not in ACTIVE_STATES:
-                print(f"\nRobot left active state ({state}). Stopping probe.")
-                print("Re-run find_coords after the next clean.")
-                break
-
-        time.sleep(0.5)  # don't hammer the robot
-
-    if found_x is not None:
-        print(f"\nUpdate DEVICES['{device_name}'] with these coordinates for your HA automation.")
-        print(f"  goto({found_x}, {found_y})")
-    else:
-        print("\nNo working coordinates found in ±1000 range.")
-        print("Try running after a complete clean (robot fully docked, map loaded).")
+    print(f"\nFinished after {duration}s. No goto coordinates intercepted.")
+    print("Make sure the robot is active (DPS15 not Sleeping) before using the app to send a goto.")
 
 
 def cmd_monitor(device_name: str, duration: int = 120) -> None:
@@ -480,18 +449,20 @@ Usage:
   tuya_local_control.py home           <device>
   tuya_local_control.py goto           <device> <x> <y>
   tuya_local_control.py goto_active    <device> <x> <y> [timeout_s]
-  tuya_local_control.py find_coords    <device> [timeout_s]
+  tuya_local_control.py intercept_pos  <device> [duration_seconds]
   tuya_local_control.py test_goto      <device>
   tuya_local_control.py monitor        <device> [duration_seconds]
 
 device: upstairs | downstairs
 
-To discover coordinates:
-  1. Start a clean: 'start <device>'
-  2. Run:          'find_coords <device>'
-  The script waits for the robot to dock (DPS15=Completed), then probes
-  a grid of coordinates until goto returns 'O'.  Use those coordinates
-  with 'goto_active' for subsequent runs.
+To discover bin coordinates (one-time setup):
+  1. Start a clean: 'start <device>'  (robot must be active, not sleeping)
+  2. Run:          'intercept_pos <device>'
+  3. In the Eufy app, tap the map to send the robot to the bin location
+  4. Script prints the x,y coordinates — hardcode them in DEVICES or use goto_active
+
+Normal use (after coordinates are known):
+  python tuya_local_control.py goto_active <device> <x> <y>
 """
 
 
@@ -510,9 +481,9 @@ def main() -> None:
 
     if cmd == "status":
         cmd_status(device)
-    elif cmd == "find_coords":
-        timeout = int(args[2]) if len(args) > 2 else 600
-        cmd_find_coords(device, timeout)
+    elif cmd == "intercept_pos":
+        duration = int(args[2]) if len(args) > 2 else 90
+        cmd_intercept_pos(device, duration)
     elif cmd == "test_goto":
         cmd_test_goto(device)
     elif cmd == "goto_active":
