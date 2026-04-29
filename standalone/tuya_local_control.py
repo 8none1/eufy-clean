@@ -302,35 +302,51 @@ def cmd_monitor(device_name: str, duration: int = 120) -> None:
     print("(Use Eufy app to send goto command — watch DPS 124 for coordinates)")
     print()
 
+    last_dps15 = None
+    last_heartbeat = time.time()
+
     start = time.time()
     while time.time() - start < duration:
+        elapsed = time.time() - start
+
         try:
             msg = d.receive()
         except Exception:
             msg = None
 
         if msg and "dps" in msg:
-            elapsed = time.time() - start
             decoded = _decode_dps(msg["dps"])
             interesting = {k: v for k, v in decoded.items()
                            if k in ("15", "124", "125", "121", "142", "5")}
             if interesting:
-                print(f"[{elapsed:6.1f}s] DPS update:")
+                print(f"[{elapsed:6.1f}s] DPS push:")
                 for k, v in sorted(interesting.items(), key=lambda x: int(x[0])):
                     print(f"         {k}: {v}")
-                # Highlight if DPS 124 has coordinate data
-                if "124" in decoded:
-                    cmd_data = decoded["124"]
-                    if isinstance(cmd_data, dict):
-                        method = cmd_data.get("method", "")
-                        data = cmd_data.get("data", {})
-                        if any(k in data for k in ("x", "y", "posX", "posY")):
-                            print(f"  *** COORDINATES FOUND: {data} ***")
+
+                # When DPS 15 changes, poll full status immediately to catch
+                # any DPS 124 that the robot might not have pushed
+                new_dps15 = decoded.get("15")
+                if new_dps15 and new_dps15 != last_dps15:
+                    last_dps15 = new_dps15
+                    # Small delay then full poll
+                    time.sleep(0.5)
+                    full_status = d.status()
+                    if full_status and "dps" in full_status:
+                        full = _decode_dps(full_status["dps"])
+                        dps124 = full.get("124")
+                        if dps124:
+                            print(f"         [poll] DPS 124: {dps124}")
+                            if isinstance(dps124, dict):
+                                inner = dps124.get("data", {})
+                                if any(k in inner for k in ("x", "y", "posX", "posY")):
+                                    print(f"  *** COORDINATES FOUND: {inner} ***")
+
                 print()
 
-        # Send heartbeat every 10s to keep connection alive
-        if int(time.time() - start) % 10 == 0:
+        # Heartbeat every 10s
+        if time.time() - last_heartbeat >= 10:
             d.heartbeat()
+            last_heartbeat = time.time()
 
     print("Monitor complete.")
 
