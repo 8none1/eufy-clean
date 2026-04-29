@@ -315,7 +315,8 @@ def cmd_intercept_pos(device_name: str, duration: int = 90) -> None:
     print(">>> In the Eufy app, tap the map to send the robot to your target location <<<")
     print()
 
-    last_dps124 = None
+    last_dps15 = None
+    last_snapshot = {}
     start = time.time()
     poll_count = 0
 
@@ -332,43 +333,36 @@ def cmd_intercept_pos(device_name: str, duration: int = 90) -> None:
             continue
 
         decoded = _decode_dps(raw["dps"])
-        dps124 = decoded.get("124")
-
-        poll_count += 1
         elapsed = time.time() - start
+        poll_count += 1
+        state = decoded.get("15", "?")
 
-        # Print any change in DPS 124
-        if dps124 != last_dps124 and dps124 is not None:
-            last_dps124 = dps124
-            print(f"[{elapsed:5.1f}s] DPS 124 changed: {dps124}")
+        # On any state change, dump every DPS value — position may be in an unknown DPS
+        if state != last_dps15:
+            print(f"[{elapsed:5.1f}s] DPS15 changed: {last_dps15} → {state}")
+            print(f"  Full DPS dump:")
+            for k, v in sorted(decoded.items(), key=lambda x: int(x[0]) if str(x[0]).isdigit() else 999):
+                print(f"    DPS {k:>4}: {v}")
+            print()
+            last_dps15 = state
+            last_snapshot = dict(decoded)
 
-            if isinstance(dps124, dict):
-                method = dps124.get("method", "")
-                data = dps124.get("data", {})
-                if method == "goto" and ("x" in data or "posX" in data):
-                    x = data.get("x", data.get("posX"))
-                    y = data.get("y", data.get("posY"))
-                    print(f"\n*** TARGET COORDINATES: x={x}, y={y} ***")
-                    print(f"    mapId: {data.get('mapId')}")
-                    print(f"\nAdd to DEVICES['{device_name}']:")
-                    print(f"    \"bin_x\": {x},")
-                    print(f"    \"bin_y\": {y},")
-                    return
-                elif data:
-                    # Print any coordinates we see regardless of method name
-                    for key in ("x", "y", "posX", "posY", "pileX", "pileY"):
-                        if key in data:
-                            print(f"  {key} = {data[key]}")
+        # On any individual DPS change, print just what changed
+        else:
+            changed = {k: v for k, v in decoded.items() if last_snapshot.get(k) != v}
+            if changed:
+                for k, v in sorted(changed.items(), key=lambda x: int(x[0]) if str(x[0]).isdigit() else 999):
+                    print(f"[{elapsed:5.1f}s] DPS {k:>4} changed: {last_snapshot.get(k)} → {v}")
+                last_snapshot = dict(decoded)
 
-        # Print a heartbeat every 10s so we know it's alive
+        # Heartbeat
         if poll_count % 20 == 0:
-            state = decoded.get("15", "?")
-            print(f"[{elapsed:5.1f}s] still polling... DPS15={state}, DPS124={type(dps124).__name__}")
+            print(f"[{elapsed:5.1f}s] still polling... DPS15={state}")
 
         time.sleep(0.5)
 
-    print(f"\nFinished after {duration}s. No goto coordinates intercepted.")
-    print("Make sure the robot is active (DPS15 not Sleeping) before using the app to send a goto.")
+    print(f"\nFinished after {duration}s.")
+    print("Review the DPS dump above for any values that look like coordinates (large integers).")
 
 
 def cmd_monitor(device_name: str, duration: int = 120) -> None:
