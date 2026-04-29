@@ -266,3 +266,92 @@ Subscribe # → 0x80 REJECTED
 Publish start_auto to Downstairs → rc=0 (accepted by broker)
 Messages received in 10 minutes: 0
 ```
+
+## Tuya local protocol investigation — findings (2026-04-29)
+
+### Devices are on the Tuya local protocol (v3.3, port 6668)
+
+Both robots respond to the Tuya local protocol (tinytuya v1.18.0). Confirmed device IPs via
+UDP broadcast scan (tinytuya.deviceScan):
+
+| Device | ID | IP | Protocol |
+|--------|----|----|----------|
+| Upstairs Clean (T2262EV) | bf3b83d14f132d51b0gzpk | 192.168.42.144 | v3.3 |
+| Downstairs (T2262A) | bfc291ad10e8247fefwnk2 | 192.168.42.17 | v3.3 |
+
+Local keys retrieved via `standalone/get_local_keys.py` (Tuya Mobile API flow).
+
+### Tuya DPS mapping (X8, Tuya v3.3)
+
+This is DIFFERENT from the AIOT DPS mapping (152–180). The local protocol uses lower DPS numbers:
+
+| DPS | Name | Type | Notes |
+|-----|------|------|-------|
+| 1 | power | bool | on/off |
+| 2 | activate | bool | start/stop |
+| 5 | work_mode | str | "auto", "Nosweep", "Edge", "Spot", "room" |
+| 15 | work_status | str | "Sleeping", "Running", "Charging", "Locating", "Recharge", "Completed" |
+| 101 | return_home | bool | True = go to dock |
+| 102 | clean_speed | str | "Quiet", "Standard", "Turbo", "Max" |
+| 103 | locate | bool | toggle beeper |
+| 104 | battery | int | % |
+| 109 | cleaning_time | int | seconds |
+| 110 | cleaning_area | int | m² |
+| 118 | multi_map | bool | multi-floor map enabled |
+| 122 | work_status_2 | str | more granular: "Nosweep", "Continue", etc. |
+| 124 | command_trans | str | b64+JSON command transport (bidirectional) |
+| 125 | map_info | str | b64+JSON: `{"defaultID": 202, "version": 6}` |
+| 142 | last_clean | str | b64+JSON: last clean result with map_id |
+
+### goto command — confirmed working via DPS 124
+
+DPS 124 is a command transport DPS. Commands are encoded as base64 JSON:
+```json
+{"method": "<name>", "data": {...}, "timestamp": <ms>}
+```
+Robot echoes back with `result: "O"` (OK) or `result: "F"` (Failed).
+
+**Confirmed working methods:**
+- `selectRoomsClean` — returns "O" even from Sleeping state; starts robot
+- `goto` — returns "F" from Sleeping state (expected); robot needs active map
+
+**`goto` command format:**
+```python
+data = {"mapId": 202, "x": X, "y": Y}
+cmd = base64.b64encode(json.dumps({"method": "goto", "data": data,
+    "timestamp": round(time.time()*1000)}).encode()).decode()
+device.set_value(124, cmd)
+```
+
+**Important**: `goto` returns "F" when the robot is in Sleeping or Charging state.
+It must be sent when DPS 15 = "Locating", "Running", or "Completed" (just finished clean).
+The automation use case: trigger on DPS 15 → "Completed", then immediately send goto.
+
+### Map data and coordinate discovery
+
+Map data is NOT available via standard DPS queries. It requires one of:
+1. **Tuya IoT developer API**: Register at iot.tuya.com, create project, link device.
+   Endpoint: `GET /v1.0/users/sweepers/file/{device_id}/realtime-map` returns
+   a download URL for the 48-byte-header map binary (LZ4-compressed pixel data).
+   The header contains dock (pile) position and map origin.
+2. **Eufy app intercept**: Run `standalone/.venv/bin/python standalone/tuya_local_control.py monitor upstairs`
+   while using the Eufy app to send a goto command — DPS 124 echo includes x,y.
+
+Coordinate system: sint32 in robot's SLAM frame (likely 50mm units).
+Upstairs map_id = 202 (from DPS 125 defaultID). Downstairs map cleared by factory reset.
+
+### Standalone control tool
+
+`standalone/tuya_local_control.py` implements:
+- `status` — print current DPS
+- `start` / `home` — start cleaning / return to dock
+- `goto <x> <y>` — send goto command (needs active state)
+- `goto_active <x> <y>` — wait for active state, then goto
+- `test_goto` — verify goto command format
+- `monitor` — watch all DPS updates (use to capture coordinates from Eufy app)
+
+```bash
+cd /home/will/source/eufy-clean
+standalone/.venv/bin/python standalone/tuya_local_control.py status upstairs
+standalone/.venv/bin/python standalone/tuya_local_control.py monitor upstairs 60
+```
