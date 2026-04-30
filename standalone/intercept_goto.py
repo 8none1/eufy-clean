@@ -396,8 +396,12 @@ def main() -> None:
         sys.exit(1)
 
     parser = argparse.ArgumentParser(description="Intercept Eufy goto coordinates via ARP spoof")
-    parser.add_argument("--device",    default="upstairs", choices=list(DEVICES),
-                        help="Which robot (default: upstairs)")
+    parser.add_argument("--device",    default=None, choices=list(DEVICES),
+                        help="Named robot from built-in DEVICES dict (optional if --robot-ip and --key given)")
+    parser.add_argument("--robot-ip",  default=None,
+                        help="Robot IP address (overrides --device)")
+    parser.add_argument("--key",       default=None,
+                        help="Robot local key (overrides --device)")
     parser.add_argument("--phone-ip",  default=None,
                         help="Phone IP (auto-detected from first connection if omitted)")
     parser.add_argument("--phone-mac", default=None,
@@ -410,12 +414,25 @@ def main() -> None:
                         help="Capture duration in seconds (default: 180)")
     args = parser.parse_args()
 
-    dev      = DEVICES[args.device]
-    robot_ip = dev["ip"]
-    key      = dev["key"]
-    iface    = args.iface
+    if args.robot_ip and args.key:
+        robot_ip = args.robot_ip
+        key      = args.key.encode() if isinstance(args.key, str) else args.key
+        label    = robot_ip
+    elif args.device:
+        dev      = DEVICES[args.device]
+        robot_ip = dev["ip"]
+        key      = dev["key"]
+        label    = args.device
+    else:
+        # Default to first device in the dict
+        label    = next(iter(DEVICES))
+        dev      = DEVICES[label]
+        robot_ip = dev["ip"]
+        key      = dev["key"]
 
-    print(f"Target robot: {args.device} ({robot_ip})")
+    iface = args.iface
+
+    print(f"Target robot: {label} ({robot_ip})")
     print(f"Interface:    {iface}")
     print()
 
