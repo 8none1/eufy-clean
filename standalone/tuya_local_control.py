@@ -571,6 +571,89 @@ def cmd_find_bin_pos(device_name: str, duration: int = 300) -> None:
         print("be coordinates even if not labeled as x/y.")
 
 
+def cmd_test_pos_active(device_name: str) -> None:
+    """
+    Start a brief clean, query all position methods while robot moves, then stop.
+
+    Use this to find which DPS 124 method returns live x/y when the robot is active.
+    Once you know the right method, run query_pos while the robot is at the bin.
+
+    WARNING: Robot will start cleaning. Make sure floor is clear.
+    It will be stopped after ~30 seconds.
+    """
+    d = _device(device_name)
+    d.set_socketPersistent(True)
+    d.set_socketTimeout(5)
+
+    print(f"=== Active position method test — {DEVICES[device_name]['name']} ===")
+    print()
+
+    # Check current state
+    raw = d.status()
+    state = _decode_dps(raw.get("dps", {})).get("15", "?") if raw else "?"
+    print(f"Current DPS15: {state!r}")
+
+    if state not in ("standby", "Sleeping", "sleeping", "Charging", "charging", "Completed", "completed"):
+        print(f"Robot is {state!r} — not in a restable state. Aborting.")
+        return
+
+    # Start cleaning
+    print("Starting auto clean...")
+    d.set_value(int(DPS_WORK_MODE), "auto")
+    print("Waiting 15s for robot to start navigating...")
+    time.sleep(15)
+
+    # Check it started
+    raw = d.status()
+    state = _decode_dps(raw.get("dps", {})).get("15", "?") if raw else "?"
+    print(f"DPS15 after start: {state!r}")
+    print()
+
+    # Query all position methods while active
+    print("--- Querying position methods while active ---")
+    for method in POSITION_QUERY_METHODS:
+        try:
+            cmd = _encode_cmd(method)
+            resp = d.set_value(int(DPS_COMMAND_TRANS), cmd)
+            if resp and "dps" in resp:
+                decoded_resp = _decode_dps(resp["dps"])
+                dps124 = decoded_resp.get("124")
+                tag = ""
+                if isinstance(dps124, dict):
+                    data = dps124.get("data", {})
+                    if isinstance(data, dict) and any(
+                        isinstance(data.get(kk), (int, float))
+                        for kk in data
+                        if any(c in kk.lower() for c in ("x", "y", "pos", "coord"))
+                    ):
+                        tag = "  *** COORDS FOUND ***"
+                print(f"  {method:<22} → {dps124}{tag}")
+            else:
+                print(f"  {method:<22} → (no DPS response)")
+        except Exception as e:
+            print(f"  {method:<22} → ERROR: {e}")
+        time.sleep(0.5)
+
+    print()
+
+    # Also do a full status dump while active
+    print("--- Full DPS dump while active ---")
+    raw = d.status()
+    if raw and "dps" in raw:
+        decoded = _decode_dps(raw["dps"])
+        for k, v in sorted(decoded.items(), key=lambda x: int(x[0]) if str(x[0]).isdigit() else 999):
+            print(f"  DPS {k:>4}: {v}")
+    print()
+
+    # Stop the robot
+    print("Stopping robot (return home)...")
+    d.set_value(int(DPS_RETURN_HOME), True)
+    print("Done. Review output above for position methods that returned x/y values.")
+    print()
+    print("Once you know the right method: use Eufy app to send robot to bin,")
+    print("then run: query_pos downstairs")
+
+
 def cmd_monitor(device_name: str, duration: int = 120) -> None:
     """
     Monitor all DPS updates from the robot for <duration> seconds.
@@ -652,6 +735,7 @@ Usage:
   tuya_local_control.py intercept_pos  <device> [duration_seconds]
   tuya_local_control.py query_pos      <device>
   tuya_local_control.py find_bin_pos   <device> [duration_seconds]
+  tuya_local_control.py test_pos_active <device>
   tuya_local_control.py test_goto      <device>
   tuya_local_control.py monitor        <device> [duration_seconds]
 
@@ -693,6 +777,8 @@ def main() -> None:
         cmd_status(device)
     elif cmd == "query_pos":
         cmd_query_pos(device)
+    elif cmd == "test_pos_active":
+        cmd_test_pos_active(device)
     elif cmd == "find_bin_pos":
         duration = int(args[2]) if len(args) > 2 else 300
         cmd_find_bin_pos(device, duration)
