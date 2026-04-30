@@ -231,7 +231,7 @@ def _stop_arp_spoof(phone_ip: str, robot_ip: str, iface: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# IP forwarding
+# IP forwarding + iptables
 # ---------------------------------------------------------------------------
 
 def _enable_ip_forward() -> bool:
@@ -252,6 +252,25 @@ def _disable_ip_forward() -> None:
             f.write("0\n")
     except Exception:
         pass
+
+
+def _add_iptables_forward(phone_ip: str, robot_ip: str) -> None:
+    """Allow kernel to forward packets between phone and robot."""
+    import subprocess
+    for src, dst in [(phone_ip, robot_ip), (robot_ip, phone_ip)]:
+        subprocess.run(
+            ["iptables", "-I", "FORWARD", "-s", src, "-d", dst, "-j", "ACCEPT"],
+            check=False, capture_output=True,
+        )
+
+
+def _remove_iptables_forward(phone_ip: str, robot_ip: str) -> None:
+    import subprocess
+    for src, dst in [(phone_ip, robot_ip), (robot_ip, phone_ip)]:
+        subprocess.run(
+            ["iptables", "-D", "FORWARD", "-s", src, "-d", dst, "-j", "ACCEPT"],
+            check=False, capture_output=True,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -445,15 +464,17 @@ def main() -> None:
             sys.exit(1)
         print(f"Detected phone IP: {phone_ip}")
 
-    # Step 2: Enable IP forwarding
+    # Step 2: Enable IP forwarding + iptables FORWARD rules
     was_forwarding = _enable_ip_forward()
     print(f"IP forwarding: enabled (was {'on' if was_forwarding else 'off'})")
+    _add_iptables_forward(phone_ip, robot_ip)
+    print("iptables FORWARD rules added.")
 
     # Step 3: Start ARP spoofing
     print(f"\nStarting ARP poison: {phone_ip} ↔ {robot_ip}")
     _start_arp_spoof(phone_ip, robot_ip, iface,
                      phone_mac=args.phone_mac, robot_mac=args.robot_mac)
-    time.sleep(2)  # let ARP tables update
+    time.sleep(3)  # let ARP tables update on both devices
 
     # Cleanup on Ctrl+C
     coords: list[tuple[int, int]] = []
@@ -461,17 +482,23 @@ def main() -> None:
     def _cleanup(signum=None, frame=None):
         print("\nCleaning up...")
         _stop_arp_spoof(phone_ip, robot_ip, iface)
+        _remove_iptables_forward(phone_ip, robot_ip)
         if not was_forwarding:
             _disable_ip_forward()
         if coords:
             print(f"\nFinal result: goto({coords[0][0]}, {coords[0][1]})")
-            print(f"\nAdd to tuya_local_control.py DEVICES['{args.device}']:")
+            print(f"\nAdd to tuya_local_control.py DEVICES entry for {robot_ip}:")
             print(f"  'bin_x': {coords[0][0]},")
             print(f"  'bin_y': {coords[0][1]},")
         sys.exit(0)
 
     signal.signal(signal.SIGINT,  _cleanup)
     signal.signal(signal.SIGTERM, _cleanup)
+
+    print("\n" + "="*50)
+    print("  READY — NOW open the Eufy app on your phone.")
+    print("  Once connected, send the robot to the bin.")
+    print("="*50 + "\n")
 
     # Step 4: Capture
     result = capture_goto(robot_ip, phone_ip, key, iface, duration=args.duration)
