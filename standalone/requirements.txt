@@ -1,3 +1,5 @@
 requests
 paho-mqtt
 protobuf
+scapy
+pycryptodome
