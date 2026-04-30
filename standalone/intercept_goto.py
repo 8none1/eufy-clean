@@ -326,13 +326,22 @@ def capture_goto(robot_ip: str, phone_ip: str, key: bytes,
 
     found_coords: list[tuple[int, int]] = []
     buf: dict[tuple, bytes] = {}  # (src,sport) → accumulated bytes
+    pkt_count = [0]
 
     def _pkt(pkt):
-        if IP not in pkt or TCP not in pkt or Raw not in pkt:
+        pkt_count[0] += 1
+        if pkt_count[0] % 10 == 1:
+            print(f"  [debug] packets seen so far: {pkt_count[0]}")
+
+        if IP not in pkt or TCP not in pkt:
+            flags = pkt[TCP].flags if TCP in pkt else "?"
+            src = pkt[IP].src if IP in pkt else "?"
+            print(f"  [debug] non-data pkt from {src} flags={flags}")
             return
 
         src = pkt[IP].src
         dst = pkt[IP].dst
+        print(f"  [tcp] {src} → {dst}  len={len(pkt[TCP].payload) if TCP in pkt else 0}")
         if not ({src, dst} == {phone_ip, robot_ip}):
             return
 
