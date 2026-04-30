@@ -369,15 +369,23 @@ def capture_goto(robot_ip: str, phone_ip: str, key: bytes,
 
     found_coords: list[tuple[int, int]] = []
     buf: dict[tuple, bytes] = {}  # (src_ip, src_port) → accumulated bytes
-    pkt_count = 0
-    deadline = time.time() + duration
+    frame_count = 0
+    pkt_count   = 0
+    deadline    = time.time() + duration
+
+    print(f"  Raw socket open on {iface}. Waiting for frames...", flush=True)
 
     try:
         while time.time() < deadline and not found_coords:
             try:
                 raw_frame = sock.recv(65535)
-            except TimeoutError:
+            except OSError:
                 continue
+
+            frame_count += 1
+            if frame_count % 200 == 1:
+                print(f"  [raw] frames so far: {frame_count}  tuya-matched: {pkt_count}",
+                      flush=True)
 
             parsed = _parse_tcp_payload(raw_frame, phone_ip, robot_ip)
             if parsed is None:
