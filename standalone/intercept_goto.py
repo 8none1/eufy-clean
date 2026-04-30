@@ -312,105 +312,137 @@ def discover_phone_ip(robot_ip: str, iface: str, timeout: int = 30) -> str | Non
 # Phase 2: Capture and decrypt
 # ---------------------------------------------------------------------------
 
+def _parse_tcp_payload(raw_frame: bytes, phone_ip: str, robot_ip: str
+                       ) -> tuple[str, str, int, bytes] | None:
+    """
+    Parse a raw Ethernet frame.
+    Returns (src_ip, dst_ip, src_port, tcp_payload) or None.
+    """
+    if len(raw_frame) < 14:
+        return None
+    eth_type = int.from_bytes(raw_frame[12:14], "big")
+    if eth_type != 0x0800:  # IPv4 only
+        return None
+
+    ip = raw_frame[14:]
+    if len(ip) < 20:
+        return None
+    if ip[9] != 6:  # TCP only
+        return None
+    ihl = (ip[0] & 0xF) * 4
+
+    import socket as _socket
+    src_ip = _socket.inet_ntoa(ip[12:16])
+    dst_ip = _socket.inet_ntoa(ip[16:20])
+    if not ({src_ip, dst_ip} == {phone_ip, robot_ip}):
+        return None
+
+    tcp = ip[ihl:]
+    if len(tcp) < 20:
+        return None
+    src_port = int.from_bytes(tcp[0:2], "big")
+    dst_port = int.from_bytes(tcp[2:4], "big")
+    if TUYA_PORT not in (src_port, dst_port):
+        return None
+
+    tcp_hdr_len = ((tcp[12] >> 4) & 0xF) * 4
+    payload = tcp[tcp_hdr_len:]
+    return src_ip, dst_ip, src_port, payload
+
+
 def capture_goto(robot_ip: str, phone_ip: str, key: bytes,
                  iface: str, duration: int = 180) -> tuple[int, int] | None:
     """
-    Sniff TCP traffic between phone and robot.
-    Decrypt every Tuya SET packet (cmd=7) containing DPS 124.
-    Return (x, y) when a goto command is found.
+    Capture TCP traffic between phone and robot using a raw AF_PACKET socket
+    (no scapy dependency for capture — avoids L2ListenSocket crash on Linux).
+    Decrypt every Tuya SET packet containing DPS 124 and return (x, y) on goto.
     """
-    from scapy.all import sniff, TCP, IP, Raw
+    import socket as _socket
 
     print(f"\nCapturing Tuya traffic between {phone_ip} ↔ {robot_ip} ...")
     print(f"({duration}s window — use the Eufy app to send a goto to the bin)\n")
 
+    sock = _socket.socket(_socket.AF_PACKET, _socket.SOCK_RAW,
+                          _socket.htons(0x0003))  # ETH_P_ALL
+    sock.bind((iface, 0))
+    sock.settimeout(1.0)
+
     found_coords: list[tuple[int, int]] = []
-    buf: dict[tuple, bytes] = {}  # (src,sport) → accumulated bytes
-    pkt_count = [0]
+    buf: dict[tuple, bytes] = {}  # (src_ip, src_port) → accumulated bytes
+    pkt_count = 0
+    deadline = time.time() + duration
 
-    def _pkt(pkt):
-        pkt_count[0] += 1
-        if pkt_count[0] % 10 == 1:
-            print(f"  [debug] packets seen so far: {pkt_count[0]}")
-
-        if IP not in pkt or TCP not in pkt:
-            flags = pkt[TCP].flags if TCP in pkt else "?"
-            src = pkt[IP].src if IP in pkt else "?"
-            print(f"  [debug] non-data pkt from {src} flags={flags}")
-            return
-
-        src = pkt[IP].src
-        dst = pkt[IP].dst
-        print(f"  [tcp] {src} → {dst}  len={len(pkt[TCP].payload) if TCP in pkt else 0}")
-        if not ({src, dst} == {phone_ip, robot_ip}):
-            return
-
-        stream_key = (src, pkt[TCP].sport)
-        buf[stream_key] = buf.get(stream_key, b"") + bytes(pkt[Raw])
-        data = buf[stream_key]
-
-        # Try to find Tuya packet boundaries in the buffer
-        offset = 0
-        while offset < len(data):
-            idx = data.find(b"\x00\x00U\xaa", offset)
-            if idx == -1:
-                break
-            if len(data) - idx < 20:
-                buf[stream_key] = data[idx:]
-                break
-            length = int.from_bytes(data[idx+12:idx+16], "big")
-            pkt_end = idx + 20 + length - 4  # header(20) + payload(length) - suffix(4 already in length? check)
-            # Tuya length = retcode(4) + payload + suffix(4), so full packet = 20 + length
-            pkt_end = idx + 20 + length
-            if pkt_end > len(data):
-                buf[stream_key] = data[idx:]
-                break
-
-            raw_pkt = data[idx:pkt_end]
-            offset = pkt_end
-
-            parsed = parse_tuya_packet(raw_pkt, key)
-            if not parsed:
+    try:
+        while time.time() < deadline and not found_coords:
+            try:
+                raw_frame = sock.recv(65535)
+            except TimeoutError:
                 continue
 
-            cmd = parsed["cmd"]
-            msg = parsed["msg"]
-            direction = "phone→robot" if src == phone_ip else "robot→phone"
+            parsed = _parse_tcp_payload(raw_frame, phone_ip, robot_ip)
+            if parsed is None:
+                continue
 
-            # cmd 7 = CONTROL (SET from app to device)
-            # cmd 8 = STATUS (response from device)
-            dps = msg.get("dps", {})
-            if "124" in dps:
-                decoded = decode_dps124(dps["124"])
-                print(f"  [{direction}] cmd={cmd} DPS124: {decoded}")
-                if isinstance(decoded, dict):
-                    method = decoded.get("method", "")
-                    data_field = decoded.get("data", {})
-                    if method == "goto" and "x" in data_field and "y" in data_field:
-                        x = data_field["x"]
-                        y = data_field["y"]
-                        map_id = data_field.get("mapId")
-                        print(f"\n{'='*50}")
-                        print(f"  *** GOTO COORDINATES FOUND ***")
-                        print(f"  x={x}  y={y}  mapId={map_id}")
-                        print(f"{'='*50}\n")
-                        found_coords.append((x, y))
-            elif dps and cmd == 7:
-                # Any SET command from phone — show DPS keys
-                print(f"  [{direction}] SET cmd={cmd} DPS keys={list(dps.keys())}")
+            src_ip, dst_ip, src_port, payload = parsed
+            pkt_count += 1
 
-        if found_coords:
-            return True  # stop sniff
+            if not payload:
+                continue
 
-    sniff(
-        iface=iface,
-        filter=f"tcp and host {phone_ip} and host {robot_ip} and port {TUYA_PORT}",
-        prn=_pkt,
-        stop_filter=lambda _: bool(found_coords),
-        timeout=duration,
-        store=False,
-    )
+            stream_key = (src_ip, src_port)
+            buf[stream_key] = buf.get(stream_key, b"") + payload
+            data = buf[stream_key]
 
+            # Find Tuya 55AA packet boundaries in the stream buffer
+            offset = 0
+            while offset < len(data):
+                idx = data.find(b"\x00\x00U\xaa", offset)
+                if idx == -1:
+                    buf[stream_key] = b""
+                    break
+                if len(data) - idx < 20:
+                    buf[stream_key] = data[idx:]
+                    break
+                length  = int.from_bytes(data[idx+12:idx+16], "big")
+                pkt_end = idx + 16 + length
+                if pkt_end > len(data):
+                    buf[stream_key] = data[idx:]
+                    break
+
+                raw_pkt = data[idx:pkt_end]
+                offset  = pkt_end
+
+                tuya = parse_tuya_packet(raw_pkt, key)
+                if not tuya:
+                    continue
+
+                cmd = tuya["cmd"]
+                msg = tuya["msg"]
+                direction = "phone→robot" if src_ip == phone_ip else "robot→phone"
+
+                dps = msg.get("dps", {})
+                if "124" in dps:
+                    decoded = decode_dps124(dps["124"])
+                    print(f"  [{direction}] cmd={cmd} DPS124: {decoded}")
+                    if isinstance(decoded, dict):
+                        method     = decoded.get("method", "")
+                        data_field = decoded.get("data", {})
+                        if method == "goto" and "x" in data_field and "y" in data_field:
+                            x      = data_field["x"]
+                            y      = data_field["y"]
+                            map_id = data_field.get("mapId")
+                            print(f"\n{'='*50}")
+                            print(f"  *** GOTO COORDINATES FOUND ***")
+                            print(f"  x={x}  y={y}  mapId={map_id}")
+                            print(f"{'='*50}\n")
+                            found_coords.append((x, y))
+                elif dps and cmd == 7:
+                    print(f"  [{direction}] SET cmd={cmd} DPS keys={list(dps.keys())}")
+
+    finally:
+        sock.close()
+
+    print(f"  Capture ended. TCP data packets seen: {pkt_count}")
     return found_coords[0] if found_coords else None
 
 
