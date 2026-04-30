@@ -351,13 +351,28 @@ def _parse_tcp_payload(raw_frame: bytes, phone_ip: str, robot_ip: str
 
 
 def capture_goto(robot_ip: str, phone_ip: str, key: bytes,
-                 iface: str, duration: int = 180) -> tuple[int, int] | None:
+                 iface: str, duration: int = 180,
+                 phone_mac: str | None = None,
+                 robot_mac: str | None = None) -> tuple[int, int] | None:
     """
     Capture TCP traffic between phone and robot using a raw AF_PACKET socket
     (no scapy dependency for capture — avoids L2ListenSocket crash on Linux).
     Decrypt every Tuya SET packet containing DPS 124 and return (x, y) on goto.
+
+    phone_mac / robot_mac: if supplied, only frames whose Ethernet source MAC
+    matches one of these are processed — this prevents counting our own
+    IP-forwarded copies (AF_PACKET ETH_P_ALL captures both RX and TX).
     """
     import socket as _socket
+
+    def _mac_to_bytes(mac: str) -> bytes:
+        return bytes(int(x, 16) for x in mac.split(":"))
+
+    allowed_srcs: set[bytes] = set()
+    if phone_mac:
+        allowed_srcs.add(_mac_to_bytes(phone_mac))
+    if robot_mac:
+        allowed_srcs.add(_mac_to_bytes(robot_mac))
 
     print(f"\nCapturing Tuya traffic between {phone_ip} ↔ {robot_ip} ...")
     print(f"({duration}s window — use the Eufy app to send a goto to the bin)\n")
@@ -382,8 +397,12 @@ def capture_goto(robot_ip: str, phone_ip: str, key: bytes,
             except OSError:
                 continue
 
+            # Skip our own forwarded copies — only process frames from phone/robot
+            if allowed_srcs and raw_frame[6:12] not in allowed_srcs:
+                continue
+
             frame_count += 1
-            if frame_count % 200 == 1:
+            if frame_count % 50 == 1:
                 print(f"  [raw] frames so far: {frame_count}  tuya-matched: {pkt_count}",
                       flush=True)
 
@@ -422,11 +441,14 @@ def capture_goto(robot_ip: str, phone_ip: str, key: bytes,
 
                 tuya = parse_tuya_packet(raw_pkt, key)
                 if not tuya:
+                    print(f"  [tuya] decrypt failed (len={len(raw_pkt)})", flush=True)
                     continue
 
                 cmd = tuya["cmd"]
                 msg = tuya["msg"]
                 direction = "phone→robot" if src_ip == phone_ip else "robot→phone"
+                print(f"  [tuya] {direction} cmd={cmd} keys={list(msg.get('dps',{}).keys())}",
+                      flush=True)
 
                 dps = msg.get("dps", {})
                 if "124" in dps:
@@ -550,7 +572,8 @@ def main() -> None:
     print("="*50 + "\n")
 
     # Step 4: Capture
-    result = capture_goto(robot_ip, phone_ip, key, iface, duration=args.duration)
+    result = capture_goto(robot_ip, phone_ip, key, iface, duration=args.duration,
+                          phone_mac=args.phone_mac, robot_mac=args.robot_mac)
 
     if result:
         coords.append(result)
