@@ -46,8 +46,8 @@ DEVICES = {
     },
 }
 
-MY_IP   = "192.168.42.167"
-IFACE   = "wlp0s20f3"
+MY_IP   = "192.168.42.43"
+IFACE   = "enxac1a3de93d5e"
 TUYA_PORT = 6668
 
 
