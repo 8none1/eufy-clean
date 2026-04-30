@@ -94,30 +94,60 @@ Ethernet/IP/TCP headers in pure Python.  No extra dependencies.
 
 ---
 
-## Current state — READY TO TEST
+## Current state — NEW APPROACH (ARP intercept is a dead end)
 
-The interceptor script is at `standalone/intercept_goto.py`.  It has been written,
-debugged, and the scapy crash fixed.  **The raw-socket version has not yet been
-run end-to-end** (the fix was committed just before writing this document).
+### Why the ARP intercept failed
 
-### Run command
+The ARP intercept was fully working (traffic confirmed transiting laptop, decryption working,
+cmd=10 and cmd=64 visible).  However: **the "tap and go" goto command goes via Eufy/Tuya cloud,
+not via the local TCP connection on port 6668.**
+
+The local TCP connection carries only:
+- cmd=10: status queries `{'devId': ..., 'gwId': ...}`
+- cmd=64: sub-device queries `{'reqType': 'subdev_online_stat_query'}`
+
+cmd=7 (CONTROL/SET with DPS 124 goto) **never appears on the local connection**.
+This is confirmed by running with full message dumps while using "tap and go" repeatedly.
+
+### New approach: query robot position directly
+
+Since the goto goes via cloud, we need to read the robot's current position from the robot itself
+when it is parked at the bin.  Two tools have been added to `standalone/tuya_local_control.py`:
+
+#### Option A — `query_pos` (preferred)
+
+Run **when the robot is already parked at the bin** (sent there by the Eufy app):
+
 ```bash
-sudo standalone/.venv/bin/python standalone/intercept_goto.py \
-  --robot-ip 192.168.42.144 \
-  --key "get{P<x#OI<qUenE" \
-  --phone-ip 192.168.42.153 \
-  --phone-mac 28:49:e9:10:59:b6 \
-  --robot-mac 5c:c5:63:7d:05:e4
+standalone/.venv/bin/python standalone/tuya_local_control.py query_pos upstairs
 ```
 
-### Procedure
-1. **Force-quit the Eufy app** on the phone (so it makes a fresh connection after poisoning)
-2. Run the command above
-3. Wait for the `READY — NOW open the Eufy app` banner
-4. Open the Eufy app — let it connect to the robot
-5. Use the app to send the robot to the bin location ("Go to location" / point on map)
-6. Script prints coordinates and exits; Ctrl+C also works
-7. Cleanup is automatic (ARP restored, iptables rules removed)
+This dumps the full DPS status and tries 15 DPS 124 position-query methods:
+`getPos`, `getCurPos`, `workStatus`, `getPosInfo`, `getPosition`, `curPos`, `robotPos`,
+`getWorkStatus`, `queryPos`, `getMap`, `getCleanInfo`, `currentStatus`, `getRobotPos`,
+`getChargePos`, `getDockPos`.
+
+Any method that returns x/y values is the bin coordinate.
+
+#### Option B — `find_bin_pos` (run while robot navigates)
+
+```bash
+standalone/.venv/bin/python standalone/tuya_local_control.py find_bin_pos upstairs
+```
+
+Runs for 300s, listens for all DPS pushes + polls every 5s + queries position methods every 20s.
+Use Eufy app to send robot to bin while this is running.  Ctrl+C when robot arrives.
+
+### Procedure (Option A — simpler)
+
+1. Use the Eufy app to send the upstairs robot to the bin ("Go to location")
+2. When the robot arrives and stops, immediately run:
+   ```bash
+   standalone/.venv/bin/python standalone/tuya_local_control.py query_pos upstairs
+   ```
+3. Look for x/y values in the output
+4. If no x/y found: check for large integers in any DPS (could be coordinates)
+5. Fall back to Option B if needed
 
 Expected output when successful:
 ```
@@ -186,3 +216,4 @@ Virtual environment: `standalone/.venv/`  — activate or use `standalone/.venv/
 - **DPS 120 map polling**: returns nothing useful; map data requires an active session handshake we haven't reverse-engineered
 - **Spiral coordinate search from (0,0)**: the bin is nowhere near the dock; not a viable approach
 - **MitM with TLS**: Tuya local protocol is AES-ECB over plain TCP, no TLS — no certificate issues
+- **ARP MitM of local TCP (port 6668)**: fully implemented and working (traffic confirmed, decryption confirmed) but goto command goes via cloud, not local TCP — cmd=7 never appears on the local connection regardless of ARP poisoning

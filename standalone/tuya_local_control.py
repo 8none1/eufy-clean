@@ -62,6 +62,15 @@ DEVICES = {
     },
 }
 
+# DPS 124 methods to try when querying robot position
+POSITION_QUERY_METHODS = [
+    "getPos", "getCurPos", "workStatus", "getPosInfo",
+    "getPosition", "curPos", "robotPos",
+    "getWorkStatus", "queryPos", "getMap",
+    "getCleanInfo", "currentStatus", "getRobotPos",
+    "getChargePos", "getDockPos",
+]
+
 # DPS numbers (Eufy X8 Tuya v3.3 protocol)
 DPS_POWER         = "1"    # bool: power on/off
 DPS_ACTIVATE      = "2"    # bool: start/stop
@@ -365,6 +374,203 @@ def cmd_intercept_pos(device_name: str, duration: int = 90) -> None:
     print("Review the DPS dump above for any values that look like coordinates (large integers).")
 
 
+def cmd_query_pos(device_name: str) -> None:
+    """
+    One-shot position query: full DPS dump + try all DPS 124 position methods.
+
+    Run this WHILE the robot is parked at the bin (sent there via Eufy app).
+    Any method that returns x/y coordinates is the bin position.
+
+    Usage:
+      python tuya_local_control.py query_pos upstairs
+    """
+    d = _device(device_name)
+    d.set_socketPersistent(True)
+    d.set_socketTimeout(5)
+
+    print(f"=== Position query — {DEVICES[device_name]['name']} ===")
+    print()
+
+    # Full DPS dump
+    print("--- Full DPS status ---")
+    raw = d.status()
+    if raw and "dps" in raw:
+        decoded = _decode_dps(raw["dps"])
+        for k, v in sorted(decoded.items(), key=lambda x: int(x[0]) if str(x[0]).isdigit() else 999):
+            print(f"  DPS {k:>4}: {v}")
+    else:
+        print("  (no response)")
+    print()
+
+    # Try each DPS 124 position method
+    print("--- DPS 124 position method queries ---")
+    for method in POSITION_QUERY_METHODS:
+        try:
+            cmd = _encode_cmd(method)
+            resp = d.set_value(int(DPS_COMMAND_TRANS), cmd)
+            if resp and "dps" in resp:
+                decoded_resp = _decode_dps(resp["dps"])
+                dps124 = decoded_resp.get("124")
+                tag = ""
+                if isinstance(dps124, dict):
+                    data = dps124.get("data", {})
+                    if isinstance(data, dict) and any(
+                        isinstance(data.get(kk), (int, float))
+                        for kk in data
+                        if any(c in kk.lower() for c in ("x", "y", "pos", "coord"))
+                    ):
+                        tag = "  *** COORDS? ***"
+                print(f"  {method:<22} → {dps124}{tag}")
+            else:
+                print(f"  {method:<22} → (no DPS response)")
+        except Exception as e:
+            print(f"  {method:<22} → ERROR: {e}")
+        time.sleep(0.8)
+
+    print()
+    print("If any method returned x/y values, add them to DEVICES as bin_x/bin_y.")
+
+
+def cmd_find_bin_pos(device_name: str, duration: int = 300) -> None:
+    """
+    Comprehensive monitor: dump ALL DPS while robot navigates to the bin.
+
+    Combines: receive() for pushes + status poll every 5s + DPS 124 queries.
+
+    Procedure:
+      1. Run: python tuya_local_control.py find_bin_pos upstairs
+      2. In the Eufy app, tap the map → send robot to the bin
+      3. When robot arrives at bin, press Ctrl+C (or let it time out)
+      4. Check output for x/y values — run query_pos for a targeted snapshot
+    """
+    d = _device(device_name)
+    d.set_socketPersistent(True)
+    d.set_socketTimeout(2)
+    d.set_socketRetryLimit(0)
+
+    print(f"=== Bin position finder — {DEVICES[device_name]['name']} ===")
+    print(f"Duration: {duration}s  |  Ctrl+C to stop early")
+    print()
+
+    # Initial full snapshot
+    try:
+        raw = d.status()
+        last_snapshot = _decode_dps(raw.get("dps", {})) if raw else {}
+    except Exception:
+        last_snapshot = {}
+
+    if last_snapshot:
+        print("Initial state:")
+        for k, v in sorted(last_snapshot.items(), key=lambda x: int(x[0]) if str(x[0]).isdigit() else 999):
+            print(f"  DPS {k:>4}: {v}")
+        print()
+
+    print("READY — use Eufy app to send robot to the bin now")
+    print()
+
+    found_candidates: list[tuple[str, object]] = []
+    start = time.time()
+    last_poll = time.time()
+    last_query = time.time()
+    query_idx = 0
+
+    def _note_coords(source: str, decoded: dict) -> None:
+        for k, v in decoded.items():
+            target = v.get("data", v) if isinstance(v, dict) else {}
+            if isinstance(target, dict):
+                coord_hits = [kk for kk in target if isinstance(target[kk], (int, float))
+                              and any(c in kk.lower() for c in ("x", "y", "pos", "coord"))]
+                if coord_hits:
+                    print(f"\n  *** POSSIBLE COORDS [{source}] DPS {k}: {target} ***")
+                    found_candidates.append((source, target))
+
+    try:
+        while time.time() - start < duration:
+            elapsed = time.time() - start
+
+            # Listen for pushes
+            try:
+                msg = d.receive()
+            except Exception:
+                msg = None
+                time.sleep(0.2)
+
+            if msg and "dps" in msg:
+                decoded = _decode_dps(msg["dps"])
+                changed = {k: v for k, v in decoded.items() if last_snapshot.get(k) != v}
+                if changed:
+                    print(f"\n[{elapsed:6.1f}s] DPS push — changed: {list(changed)}")
+                    for k, v in sorted(decoded.items(),
+                                       key=lambda x: int(x[0]) if str(x[0]).isdigit() else 999):
+                        marker = " ◄" if k in changed else ""
+                        print(f"  DPS {k:>4}: {v}{marker}")
+                    last_snapshot = {**last_snapshot, **decoded}
+                    _note_coords(f"push@{elapsed:.0f}s", decoded)
+
+            # Full status poll every 5s
+            if time.time() - last_poll >= 5:
+                last_poll = time.time()
+                try:
+                    raw = d.status()
+                    if raw and "dps" in raw:
+                        decoded = _decode_dps(raw["dps"])
+                        changed = {k: v for k, v in decoded.items() if last_snapshot.get(k) != v}
+                        if changed:
+                            print(f"\n[{elapsed:6.1f}s] Poll changes:")
+                            for k, v in sorted(changed.items(),
+                                               key=lambda x: int(x[0]) if str(x[0]).isdigit() else 999):
+                                print(f"  DPS {k:>4}: {last_snapshot.get(k)!r} → {v!r}")
+                            last_snapshot = {**last_snapshot, **decoded}
+                            _note_coords(f"poll@{elapsed:.0f}s", decoded)
+                        else:
+                            state = decoded.get("15", "?")
+                            print(f"[{elapsed:6.1f}s] poll OK  DPS15={state!r}    ", end="\r", flush=True)
+                except Exception as e:
+                    print(f"[{elapsed:6.1f}s] poll error: {e}")
+
+            # DPS 124 position queries every 20s
+            if time.time() - last_query >= 20:
+                last_query = time.time()
+                method = POSITION_QUERY_METHODS[query_idx % len(POSITION_QUERY_METHODS)]
+                query_idx += 1
+                try:
+                    cmd = _encode_cmd(method)
+                    print(f"\n[{elapsed:6.1f}s] → DPS 124 query: {method!r}")
+                    resp = d.set_value(int(DPS_COMMAND_TRANS), cmd)
+                    if resp and "dps" in resp:
+                        decoded_resp = _decode_dps(resp["dps"])
+                        dps124 = decoded_resp.get("124")
+                        print(f"  ← {dps124}")
+                        if isinstance(dps124, dict):
+                            _note_coords(f"query-{method}", {"124": dps124})
+                    else:
+                        print(f"  ← (no response)")
+                except Exception as e:
+                    print(f"  [query error: {e}]")
+
+    except KeyboardInterrupt:
+        elapsed = time.time() - start
+        print(f"\n[{elapsed:.0f}s] Ctrl+C — stopping.")
+
+    print()
+    elapsed = time.time() - start
+    print(f"=== SUMMARY ({elapsed:.0f}s elapsed) ===")
+    if found_candidates:
+        print(f"Coordinate candidates ({len(found_candidates)}):")
+        for source, data in found_candidates:
+            print(f"  [{source}]  {data}")
+        print()
+        print("Next: run 'query_pos upstairs' with robot parked at the bin for a clean snapshot.")
+    else:
+        print("No explicit x/y values found in DPS 124 responses.")
+        print()
+        print("Try: run 'query_pos upstairs' while robot is AT the bin — different connection")
+        print("     type may expose more DPS methods.")
+        print()
+        print("Also check the DPS dump above for large integers in any DPS — those could")
+        print("be coordinates even if not labeled as x/y.")
+
+
 def cmd_monitor(device_name: str, duration: int = 120) -> None:
     """
     Monitor all DPS updates from the robot for <duration> seconds.
@@ -444,16 +650,26 @@ Usage:
   tuya_local_control.py goto           <device> <x> <y>
   tuya_local_control.py goto_active    <device> <x> <y> [timeout_s]
   tuya_local_control.py intercept_pos  <device> [duration_seconds]
+  tuya_local_control.py query_pos      <device>
+  tuya_local_control.py find_bin_pos   <device> [duration_seconds]
   tuya_local_control.py test_goto      <device>
   tuya_local_control.py monitor        <device> [duration_seconds]
 
 device: upstairs | downstairs
 
-To discover bin coordinates (one-time setup):
-  1. Start a clean: 'start <device>'  (robot must be active, not sleeping)
-  2. Run:          'intercept_pos <device>'
-  3. In the Eufy app, tap the map to send the robot to the bin location
-  4. Script prints the x,y coordinates — hardcode them in DEVICES or use goto_active
+To discover bin coordinates (new approach — goto goes via cloud, not local TCP):
+
+  Option A — query_pos (run when robot is already at the bin):
+    1. Use Eufy app to send robot to the bin
+    2. When it arrives, run: query_pos <device>
+    3. This dumps all DPS + tries 15 DPS 124 position methods
+    4. Look for x/y values in the output
+
+  Option B — find_bin_pos (run while robot is navigating):
+    1. Run: find_bin_pos <device>
+    2. Use Eufy app to send robot to the bin
+    3. Script monitors all DPS pushes + polls + queries for the full duration
+    4. Ctrl+C when robot arrives; check output for coordinates
 
 Normal use (after coordinates are known):
   python tuya_local_control.py goto_active <device> <x> <y>
@@ -475,6 +691,11 @@ def main() -> None:
 
     if cmd == "status":
         cmd_status(device)
+    elif cmd == "query_pos":
+        cmd_query_pos(device)
+    elif cmd == "find_bin_pos":
+        duration = int(args[2]) if len(args) > 2 else 300
+        cmd_find_bin_pos(device, duration)
     elif cmd == "intercept_pos":
         duration = int(args[2]) if len(args) > 2 else 90
         cmd_intercept_pos(device, duration)
