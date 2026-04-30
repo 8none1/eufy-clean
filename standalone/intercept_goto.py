@@ -81,39 +81,43 @@ def parse_tuya_packet(data: bytes, key: bytes) -> dict | None:
     """
     Parse a raw Tuya v3.3 TCP packet.
 
-    Packet layout (55AA prefix):
-      0- 3: magic 0x000055AA
-      4- 7: seqno
-      8-11: cmd
-     12-15: length  (= retcode(4) + encrypted_payload + CRC(4) + suffix(4))
-     16-19: retcode
-     20 .. (16+length-9): AES-ECB encrypted payload
-     (16+length-8) .. (16+length-5): CRC32
-     (16+length-4) .. (16+length-1): suffix 0x0000AA55
+    Header (16 bytes): magic(4) + seqno(4) + cmd(4) + length(4)
+    length = encrypted_payload + CRC(4) + suffix(4)
+      -- retcode (4 bytes) is present in STATUS responses (cmd=8) but
+         NOT in CONTROL commands (cmd=7) sent by the app.
 
-    Returns decoded message dict or None if not a valid/decryptable Tuya packet.
+    We try enc_start=16 first (no retcode); fall back to enc_start=20
+    if that doesn't yield a multiple-of-16 payload.
     """
     if len(data) < 16:
         return None
     if data[:4] != b"\x00\x00U\xaa":
         return None
-    seq     = int.from_bytes(data[4:8],   "big")
-    cmd     = int.from_bytes(data[8:12],  "big")
-    length  = int.from_bytes(data[12:16], "big")
+    seq    = int.from_bytes(data[4:8],   "big")
+    cmd    = int.from_bytes(data[8:12],  "big")
+    length = int.from_bytes(data[12:16], "big")
 
     total = 16 + length
     if total > len(data):
         return None
 
-    retcode   = int.from_bytes(data[16:20], "big")
-    # encrypted = header(16) + retcode(4) .. total - suffix(8)
-    enc_start = 20
-    enc_end   = 16 + length - 8   # strip CRC(4) + suffix(4)
-    if enc_end <= enc_start:
-        return None
-    encrypted = data[enc_start:enc_end]
+    enc_end = 16 + length - 8  # strip CRC(4) + suffix(4)
 
-    plain = _tuya_decrypt(encrypted, key)
+    # Try without retcode (cmd=7 SET from app), then with retcode (cmd=8 STATUS)
+    plain = None
+    retcode = 0
+    for enc_start in (16, 20):
+        if enc_end <= enc_start:
+            continue
+        encrypted = data[enc_start:enc_end]
+        if len(encrypted) % 16 != 0:
+            continue
+        plain = _tuya_decrypt(encrypted, key)
+        if plain:
+            if enc_start == 20:
+                retcode = int.from_bytes(data[16:20], "big")
+            break
+
     if not plain:
         return None
 
