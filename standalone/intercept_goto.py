@@ -154,7 +154,8 @@ def _get_mac(ip: str, iface: str) -> str | None:
     return None
 
 
-def _start_arp_spoof(phone_ip: str, robot_ip: str, iface: str) -> None:
+def _start_arp_spoof(phone_ip: str, robot_ip: str, iface: str,
+                     phone_mac: str | None = None, robot_mac: str | None = None) -> None:
     """
     Continuously send ARP replies:
       - Tell phone:  robot_ip is at OUR mac
@@ -166,8 +167,8 @@ def _start_arp_spoof(phone_ip: str, robot_ip: str, iface: str) -> None:
     from scapy.all import ARP, Ether, sendp, get_if_hwaddr
 
     our_mac    = get_if_hwaddr(iface)
-    phone_mac  = _get_mac(phone_ip,  iface)
-    robot_mac  = _get_mac(robot_ip,  iface)
+    phone_mac  = phone_mac or _get_mac(phone_ip,  iface)
+    robot_mac  = robot_mac or _get_mac(robot_ip,  iface)
 
     if not phone_mac or not robot_mac:
         print(f"  Cannot resolve MACs: phone={phone_mac} robot={robot_mac}")
@@ -395,13 +396,17 @@ def main() -> None:
         sys.exit(1)
 
     parser = argparse.ArgumentParser(description="Intercept Eufy goto coordinates via ARP spoof")
-    parser.add_argument("--device",   default="upstairs", choices=list(DEVICES),
+    parser.add_argument("--device",    default="upstairs", choices=list(DEVICES),
                         help="Which robot (default: upstairs)")
-    parser.add_argument("--phone-ip", default=None,
+    parser.add_argument("--phone-ip",  default=None,
                         help="Phone IP (auto-detected from first connection if omitted)")
-    parser.add_argument("--iface",    default=IFACE,
+    parser.add_argument("--phone-mac", default=None,
+                        help="Phone MAC address (e.g. aa:bb:cc:dd:ee:ff) — skips ARP table lookup")
+    parser.add_argument("--robot-mac", default=None,
+                        help="Robot MAC address — skips ARP table lookup")
+    parser.add_argument("--iface",     default=IFACE,
                         help=f"Network interface (default: {IFACE})")
-    parser.add_argument("--duration", type=int, default=180,
+    parser.add_argument("--duration",  type=int, default=180,
                         help="Capture duration in seconds (default: 180)")
     args = parser.parse_args()
 
@@ -429,7 +434,8 @@ def main() -> None:
 
     # Step 3: Start ARP spoofing
     print(f"\nStarting ARP poison: {phone_ip} ↔ {robot_ip}")
-    _start_arp_spoof(phone_ip, robot_ip, iface)
+    _start_arp_spoof(phone_ip, robot_ip, iface,
+                     phone_mac=args.phone_mac, robot_mac=args.robot_mac)
     time.sleep(2)  # let ARP tables update
 
     # Cleanup on Ctrl+C
