@@ -454,24 +454,44 @@ def capture_goto(robot_ip: str, phone_ip: str, key: bytes,
                 print(f"  [tuya] {direction} cmd={cmd} keys={list(msg.get('dps',{}).keys())}",
                       flush=True)
 
+                # Print full message for any non-heartbeat packet
+                print(f"  [{direction}] cmd={cmd} msg={str(msg)[:300]}", flush=True)
+
                 dps = msg.get("dps", {})
-                if "124" in dps:
+
+                # Also search all string values recursively for base64 goto data
+                def _find_goto(obj):
+                    if isinstance(obj, str):
+                        decoded = decode_dps124(obj)
+                        if isinstance(decoded, dict) and decoded.get("method") == "goto":
+                            return decoded
+                    if isinstance(obj, dict):
+                        for v in obj.values():
+                            r = _find_goto(v)
+                            if r:
+                                return r
+                    if isinstance(obj, list):
+                        for v in obj:
+                            r = _find_goto(v)
+                            if r:
+                                return r
+                    return None
+
+                goto_decoded = _find_goto(msg)
+                if goto_decoded:
+                    data_field = goto_decoded.get("data", {})
+                    if "x" in data_field and "y" in data_field:
+                        x      = data_field["x"]
+                        y      = data_field["y"]
+                        map_id = data_field.get("mapId")
+                        print(f"\n{'='*50}")
+                        print(f"  *** GOTO COORDINATES FOUND ***")
+                        print(f"  x={x}  y={y}  mapId={map_id}")
+                        print(f"{'='*50}\n")
+                        found_coords.append((x, y))
+                elif "124" in dps:
                     decoded = decode_dps124(dps["124"])
                     print(f"  [{direction}] cmd={cmd} DPS124: {decoded}")
-                    if isinstance(decoded, dict):
-                        method     = decoded.get("method", "")
-                        data_field = decoded.get("data", {})
-                        if method == "goto" and "x" in data_field and "y" in data_field:
-                            x      = data_field["x"]
-                            y      = data_field["y"]
-                            map_id = data_field.get("mapId")
-                            print(f"\n{'='*50}")
-                            print(f"  *** GOTO COORDINATES FOUND ***")
-                            print(f"  x={x}  y={y}  mapId={map_id}")
-                            print(f"{'='*50}\n")
-                            found_coords.append((x, y))
-                elif dps and cmd == 7:
-                    print(f"  [{direction}] SET cmd={cmd} DPS keys={list(dps.keys())}")
 
     finally:
         sock.close()
