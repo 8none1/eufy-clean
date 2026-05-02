@@ -58,7 +58,7 @@ DEVICES = {
         "ip": "192.168.42.17",
         "key": "Sz~5?p~Gsjg$.s$$",
         "version": 3.3,
-        "map_id": None,  # map cleared by factory reset
+        "map_id": 202,  # from DPS 125 defaultID via cloud API
     },
 }
 
